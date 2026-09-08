@@ -152,6 +152,24 @@ docker compose up --build        # postgres :5432, backend :8000, frontend :8080
 6. **Deliveries → Generate** → mark picked → out → **Complete** with POD (photo/GPS/received-by).
 7. As **finance**: an invoice auto-generated on delivery (`INV-…`); open the order's **Lineage** tab to trace every line from intake document → PO → inbound → pick → delivery → invoice; check the **customer statement** and **margin report**.
 
+## Automated end-to-end demo
+
+`scripts/demo_order_flow.py` exercises the entire lifecycle with **zero credentials**
+— it boots the ERP + WeCom gateway on fresh temp databases, injects a WeCom-style
+order through the simulator, waits for AI intake to create a draft order, then
+fast-forwards the whole chain with made-up numbers:
+
+```
+confirm → consolidate → PO send → receive → pick → deliver → invoice
+```
+
+It prints each step and where to look in the UI, and dumps the mock WeCom outbox
+(the exact messages a real customer would receive). Runs in ~25 seconds.
+
+```bash
+python scripts/demo_order_flow.py
+```
+
 ## AI intake — processing rules
 
 | Input | Pipeline |
