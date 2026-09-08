@@ -6,10 +6,12 @@ Run:  cd backend && python -m uvicorn app.main:app --reload --port 8000
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from seed import seed as run_seed
 from app.api.v1 import (
@@ -22,6 +24,7 @@ from app.api.v1 import (
     intake,
     orders,
     procurement,
+    quotations,
     system,
     warehouse,
     wholesalers,
@@ -56,7 +59,7 @@ app.add_middleware(
 
 for module in (
     auth, system, customers, catalog, wholesalers, contracts,
-    intake, orders, procurement, warehouse, delivery, finance,
+    intake, orders, procurement, quotations, warehouse, delivery, finance,
     wecom_intake,
 ):
     app.include_router(module.router)
@@ -70,3 +73,18 @@ from app.services.notify import wecom_notify  # noqa: E402,F401
 @app.get("/api/health", tags=["system"])
 def health():
     return {"status": "ok", "app": settings.app_name}
+
+
+# ---- Serve the compiled React SPA (frontend/dist copied to /app/static) ----
+# In the production Docker image /app/static is always present (built in
+# stage 1 of the root Dockerfile). In local dev without a frontend build
+# this block is skipped and only the API is served.
+STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
+if STATIC_DIR.is_dir():
+    # Vite emits hashed assets under /assets/...; serve them as static files.
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa_fallback(full_path: str):  # noqa: ARG001
+        """SPA fallback: serve index.html for any non-API route."""
+        return FileResponse(STATIC_DIR / "index.html")

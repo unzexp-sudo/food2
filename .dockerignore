@@ -1,0 +1,41 @@
+# Docker build context exclusions for the Food2 ERP single-service image.
+# Kept narrow to avoid surprising exclusions; trim if a needed file is filtered.
+
+# Python caches / venv
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+**/.pytest_cache
+.venv
+**/.venv
+
+# Node / frontend source build artefacts (rebuilt in stage 1)
+node_modules
+**/node_modules
+frontend/dist
+**/dist
+
+# Local secrets and dev data — never bake into the image
+.env
+.env.*
+**/.env
+data
+**/data
+**/erp.db
+**/erp.db-journal
+
+# VCS
+.git
+
+# Tests are not needed at runtime
+**/tests
+
+# Editor / OS
+.DS_Store
+**/.DS_Store
+.idea
+**/.idea
+
+# Project-local memory (not part of the deployable repo)
+.workbuddy-ai
