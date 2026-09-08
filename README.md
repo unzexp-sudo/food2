@@ -65,7 +65,7 @@ docs/
   EXECUTIVE_SUMMARY.md   the original build plan
   AGENT_CONTRACTS.md     the binding contract every module codes against
   WECOM_CONTRACTS.md     the binding contract for the WeCom gateway
-wecom-gateway/           standalone WeCom (企业微信) ↔ ERP gateway (port 8100)
+WeCom gateway/          -> now a SEPARATE repo: github.com/unzexp-sudo/WeCom1
 docker-compose.yml        postgres + backend + nginx frontend
 ```
 
@@ -98,14 +98,14 @@ Log in with any seeded account (password `erp123`):
 
 ```bash
 cd backend && python -m pytest tests/ -q        # 263 tests
-cd wecom-gateway && python -m pytest -q         # 245 tests, hermetic (temp SQLite)
+cd WeCom1 && python -m pytest -q              # 245 tests (separate repo: unzexp-sudo/WeCom1)
 cd frontend && npm run build                    # 0 TypeScript errors
 ```
 
 ### WeCom gateway (optional, mock mode by default)
 
 ```bash
-cd wecom-gateway
+cd WeCom1        # the separate WeCom gateway repo
 pip install -r requirements.txt
 python -m uvicorn app.main:app --port 8100     # health: /wecom/health → {"mode":"mock"}
 
@@ -122,7 +122,7 @@ The gateway is **not** required to run the ERP. It defaults to `WECOM_MODE=mock`
 so it never contacts WeCom and needs no credentials. The WeCom console pages
 appear in the frontend sidebar for `admin` and `ops` once it is running.
 Full details — env vars, the identity cascade, the go-live checklist — are in
-[`wecom-gateway/README.md`](wecom-gateway/README.md).
+[WeCom gateway docs](https://github.com/unzexp-sudo/WeCom1) (separate repo).
 
 > Credentials have been validated against a real WeCom corp (`gettoken` →
 > `errcode=0`), but **no message has ever been sent to a real customer**.

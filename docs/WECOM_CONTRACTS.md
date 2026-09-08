@@ -11,7 +11,7 @@ Source of integration intent: the WeCom ↔ ERP Integration Plan supplied by the
 ## §0 Ground rules
 
 1. **One new component:** the WeCom Gateway — a separate FastAPI service at
-   `/wecom-gateway/`, port **8100**, own database, own process.
+   `/WeCom1/`, port **8100**, own database, own process.
 2. **The Gateway does NOT parse orders.** No OCR, no LLM, no SKU matching.
    The ERP intake pipeline owns all of that. The Gateway's only jobs are:
    receive → dedupe → identify customer → normalize to a file/text → hand off.
@@ -33,7 +33,7 @@ Source of integration intent: the WeCom ↔ ERP Integration Plan supplied by the
 ## §1 Repository layout & file ownership
 
 ```
-wecom-gateway/
+WeCom1/
   requirements.txt
   .env.example
   README.md
@@ -97,7 +97,7 @@ frontend/
 |---|---|
 | Gateway port | `8100` |
 | Gateway env prefix | `WECOM_` (plus `ERP_*` for ERP-side settings) |
-| Gateway DB | SQLite `wecom-gateway/data/wecom.db` (dev), Postgres via `WECOM_DATABASE_URL` |
+| Gateway DB | SQLite `WeCom1/data/wecom.db` (dev), Postgres via `WECOM_DATABASE_URL` |
 | HTTP client | `httpx` |
 | Config | `pydantic-settings` `BaseSettings`, `extra="ignore"` |
 | Datetime | timezone-aware UTC internally; ISO 8601 strings on the wire |
@@ -487,7 +487,7 @@ def notify(db, *, template: str, customer_id: str | None, payload: dict,
 
 ## §10 Definition of done
 
-1. `cd wecom-gateway && python -m pytest` — all tests pass.
+1. `cd WeCom1 && python -m pytest` — all tests pass.
 2. `cd backend && python -m pytest` — the pre-existing **226** tests still pass.
 3. Mock end-to-end: simulator posts a text order → gateway dedupes → binds customer
    → hands off → ERP creates draft → auto-confirms → gateway receives

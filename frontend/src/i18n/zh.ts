@@ -877,7 +877,7 @@ const zh = {
     },
     wecom: {
       gatewayUnreachable:
-        "无法连接企业微信网关（{{url}}）。请在 wecom-gateway/ 目录下执行 `python -m uvicorn app.main:app --port 8100` 启动。",
+        "无法连接企业微信网关（{{url}}）。请使用 `python -m uvicorn app.main:app --port 8100` 启动网关服务。",
       modeLive: "正式",
       modeMock: "模拟",
       messages: {

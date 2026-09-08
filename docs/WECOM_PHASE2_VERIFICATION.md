@@ -3,14 +3,14 @@
 Status: **complete and verified end-to-end** (mock mode, no WeCom credentials required)
 
 Date: 2026-09-08
-Scope: `wecom-gateway/` (port 8100) + the WeCom half of `backend/` (port 8000)
+Scope: `WeCom1/` (port 8100) + the WeCom half of `backend/` (port 8000)
 Contract of record: [`docs/WECOM_CONTRACTS.md`](./WECOM_CONTRACTS.md)
 
 ---
 
 ## 1. What was built
 
-A **separate gateway service** (`wecom-gateway/`) that sits between WeCom and the ERP.
+A **separate gateway service** (`WeCom1/`) that sits between WeCom and the ERP.
 
 ```
 WeCom ──► Session Archive / app callback ──► Gateway ──► ERP intake pipeline
@@ -31,11 +31,11 @@ Delivered pieces:
 
 | Area | Location |
 |---|---|
-| Ingestion, identity, archive cursor, handoff | `wecom-gateway/app/services/` |
-| Callback / ingest / archive / messages / contacts / groups / send routers | `wecom-gateway/app/api/` |
-| Bilingual outbound templates (en + zh) | `wecom-gateway/app/templates/messages.py` |
-| WeCom API, archive-decrypt, ERP, storage adapters | `wecom-gateway/app/adapters/` |
-| Full simulator (12 scenarios, no credentials needed) | `wecom-gateway/simulator/` |
+| Ingestion, identity, archive cursor, handoff | `WeCom1/app/services/` |
+| Callback / ingest / archive / messages / contacts / groups / send routers | `WeCom1/app/api/` |
+| Bilingual outbound templates (en + zh) | `WeCom1/app/templates/messages.py` |
+| WeCom API, archive-decrypt, ERP, storage adapters | `WeCom1/app/adapters/` |
+| Full simulator (12 scenarios, no credentials needed) | `WeCom1/simulator/` |
 | ERP-side intake endpoint + outbound notify hooks | `backend/app/api/v1/wecom_intake.py`, `backend/app/services/notify/` |
 | WeCom console pages in the frontend | `frontend/src/pages/` |
 
@@ -142,13 +142,13 @@ Rendered message actually sent to the customer:
 
 | Suite | Result |
 |---|---|
-| `wecom-gateway` | **245 passed**, 0 xfail |
+| `WeCom1` | **245 passed**, 0 xfail |
 | `backend` | **263 passed** |
 | `frontend` | build clean — 3211 modules, no TS errors |
 
-New regression tests: `wecom-gateway/tests/test_integration_fixes.py` (21 tests,
+New regression tests: `WeCom1/tests/test_integration_fixes.py` (21 tests,
 one per defect above), `backend/tests/test_notify_payload.py` (6 tests),
-`wecom-gateway/tests/test_preflight.py` (7 tests) and the
+`WeCom1/tests/test_preflight.py` (7 tests) and the
 `WECOM_SEND_ALLOWLIST` block in `tests/test_outbound.py` (6 tests) plus
 `tests/test_config.py` (2 tests).
 
@@ -214,11 +214,11 @@ cd backend && ERP_SERVICE_KEY=dev-service-key \
   python -m uvicorn app.main:app --port 8000
 
 # Gateway
-cd wecom-gateway && WECOM_ERP_API_KEY=dev-service-key \
+cd WeCom1 && WECOM_ERP_API_KEY=dev-service-key \
   python -m uvicorn app.main:app --port 8100
 
 # Stage demo traffic and pull it
-cd wecom-gateway && python -m simulator.producer all
+cd WeCom1 && python -m simulator.producer all
 curl -X POST http://127.0.0.1:8100/wecom/archive/callback -d '{}'
 ```
 
@@ -310,7 +310,7 @@ work around it.** To clear it:
 3. Re-run the preflight:
 
 ```bash
-cd wecom-gateway && python scripts/preflight.py
+cd WeCom1 && python scripts/preflight.py
 ```
 
 It exits `0` only when `agent/get` succeeds. Until then, **stay in

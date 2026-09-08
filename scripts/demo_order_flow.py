@@ -8,6 +8,9 @@ frontend.
 
 Usage:
     python scripts/demo_order_flow.py
+    WECOM_GATEWAY_DIR=/path/to/WeCom1 python scripts/demo_order_flow.py
+
+The WeCom gateway now lives in its own repo (WeCom1). If WECOM_GATEWAY_DIR is set (or a local ./wecom-gateway exists), the full WeCom -> ERP flow runs. Otherwise the gateway steps are skipped and the script exits cleanly.
 
 No credentials, no network, no WeCom required — everything is mock mode.
 """
@@ -30,6 +33,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ERP_PORT, GW_PORT = 8000, 8100
 ERP = f"http://127.0.0.1:{ERP_PORT}"
 GW = f"http://127.0.0.1:{GW_PORT}"
+# The WeCom gateway now lives in its own repo (WeCom1). Point WECOM_GATEWAY_DIR
+# at a checkout of it to run the full WeCom -> ERP demo; otherwise the gateway
+# steps are skipped and the script exits cleanly.
+GW_DIR = os.environ.get("WECOM_GATEWAY_DIR")
+if GW_DIR and not os.path.isdir(GW_DIR):
+    print(f"{WARN}WECOM_GATEWAY_DIR={GW_DIR} is not a directory; ignoring")
+    GW_DIR = None
+if not GW_DIR:
+    _cand = os.path.join(ROOT, "wecom-gateway")
+    GW_DIR = _cand if os.path.isdir(_cand) else None
+HAS_GW = GW_DIR is not None
 ADMIN = {"email": "admin@erp.local", "password": "erp123"}
 TODAY = date.today()
 TOMORROW = TODAY + timedelta(days=1)
@@ -47,7 +61,10 @@ def banner(title: str) -> None:
 
 def wait_for_services(client: httpx.Client, timeout: float = 30.0) -> bool:
     deadline = time.time() + timeout
-    for name, url in (("gateway", f"{GW}/wecom/health"), ("erp", f"{ERP}/docs")):
+    targets = [("erp", f"{ERP}/docs")]
+    if HAS_GW:
+        targets.append(("gateway", f"{GW}/wecom/health"))
+    for name, url in targets:
         while time.time() < deadline:
             try:
                 if client.get(url).status_code == 200:
@@ -163,12 +180,15 @@ def main() -> int:
                 cwd=f"{ROOT}/backend", env=erp_env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             ),
-            subprocess.Popen(
-                [PY, "-m", "uvicorn", "app.main:app", "--port", str(GW_PORT)],
-                cwd=f"{ROOT}/wecom-gateway", env=gw_env,
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-            ),
         ]
+        if HAS_GW:
+            procs.append(
+                subprocess.Popen(
+                    [PY, "-m", "uvicorn", "app.main:app", "--port", str(GW_PORT)],
+                    cwd=GW_DIR, env=gw_env,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                )
+            )
         client = httpx.Client(trust_env=False, timeout=30)
         if not wait_for_services(client):
             return 1
@@ -185,11 +205,19 @@ def main() -> int:
         # ------------------------------------------------------------------
         # 2. Stage WeCom traffic (simulator + archive pull)
         # ------------------------------------------------------------------
+        if not HAS_GW:
+            banner("2. WeCom gateway not found - skipping WeCom injection")
+            print(f"{WARN}The WeCom gateway now lives in its own repo (WeCom1).")
+            print(f"{INFO}To run the full WeCom -> ERP demo, clone it and set")
+            print(f"      WECOM_GATEWAY_DIR=/path/to/WeCom1  then re-run this script.")
+            print(f"{INFO}Without the gateway there is no WeCom order to ingest, so")
+            print(f"      the ERP lifecycle demo cannot continue. Exiting cleanly.")
+            return 0
         banner("2. Injecting a WeCom order")
         # Run the simulator against our temp dirs.
         subprocess.run(
             [PY, "-m", "simulator.producer", "--scenario", "all"],
-            cwd=f"{ROOT}/wecom-gateway", env=gw_env,
+            cwd=GW_DIR, env=gw_env,
             capture_output=True, text=True,
         )
         # Trigger archive pull so messages land in the gateway DB.

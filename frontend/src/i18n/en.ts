@@ -877,7 +877,7 @@ const en = {
     },
     wecom: {
       gatewayUnreachable:
-        "Cannot reach the WeCom gateway at {{url}}. Start it with `python -m uvicorn app.main:app --port 8100` inside wecom-gateway/.",
+        "Cannot reach the WeCom gateway at {{url}}. Start it with `python -m uvicorn app.main:app --port 8100`.",
       modeLive: "live",
       modeMock: "mock",
       messages: {
