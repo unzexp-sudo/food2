@@ -35,6 +35,7 @@ import { useDetail, useMutate } from "../../api/hooks";
 import { formatDate, formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 import ConfidenceTag from "../../components/ConfidenceTag";
+import OrderTimeline from "./OrderTimeline";
 import client from "../../api/client";
 import { parseStoredUser } from "../../types";
 
@@ -556,6 +557,10 @@ export default function OrderDetailPage() {
             ),
           },
         ]} />
+      </Card>
+
+      <Card title={"Order timeline"}>
+        <OrderTimeline order={order} />
       </Card>
 
       {/* Edit lines drawer */}

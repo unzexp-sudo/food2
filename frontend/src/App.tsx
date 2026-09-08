@@ -6,6 +6,8 @@ import "./i18n";
 import { LanguageProvider, useLanguage } from "./i18n";
 import { AppRoutes } from "./router";
 import { setMessageInstance } from "./api/message";
+import { ThemeModeProvider, useThemeMode } from "./theme-context";
+import { buildTheme } from "./theme";
 
 /** Captures the AntdApp message instance for useMutate (see src/api/message.ts). */
 function MessageBridge() {
@@ -18,8 +20,9 @@ function MessageBridge() {
 
 function Shell() {
   const { lang } = useLanguage();
+  const { mode } = useThemeMode();
   return (
-    <ConfigProvider locale={lang === "zh" ? zhCN : enUS}>
+    <ConfigProvider locale={lang === "zh" ? zhCN : enUS} theme={buildTheme(mode)}>
       <AntdApp>
         <MessageBridge />
         <AppRoutes />
@@ -30,8 +33,10 @@ function Shell() {
 
 export default function App() {
   return (
-    <LanguageProvider>
-      <Shell />
-    </LanguageProvider>
+    <ThemeModeProvider>
+      <LanguageProvider>
+        <Shell />
+      </LanguageProvider>
+    </ThemeModeProvider>
   );
 }

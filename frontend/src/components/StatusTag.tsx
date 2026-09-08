@@ -17,7 +17,8 @@ export type StatusDomain =
   | "master"
   | "customerType"
   | "wecomMessage"
-  | "wecomOutbound";
+  | "wecomOutbound"
+  | "quotation";
 
 /** Generic color per raw status value (shared across domains). */
 const COLOR_BY_VALUE: Record<string, string> = {

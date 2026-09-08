@@ -10,13 +10,14 @@ import {
   Space,
   Table,
   Tag,
-  type TableProps,
+  type TableColumnsType,
 } from "antd";
 import { useLanguage } from "../../i18n";
 import { api, type Page } from "../../api/client";
 import { useList, useMutate } from "../../api/hooks";
 import { formatDateTime, pickName } from "../../utils/format";
 import { parseStoredUser } from "../../types";
+import StockAdjustModal from "./StockAdjustModal";
 
 /** Entity shapes per AGENT_CONTRACTS §4. */
 interface Product {
@@ -62,6 +63,9 @@ export default function InventoryPage() {
   const [form] = Form.useForm();
   const { loading: mutateLoading, run } = useMutate();
 
+  const [adjustItem, setAdjustItem] = useState<InventoryMovement | null>(null);
+  const [adjustOpen, setAdjustOpen] = useState(false);
+
   const handleLoss = async () => {
     let values: { product_id: string; quantity: number; reason: string };
     try {
@@ -85,7 +89,7 @@ export default function InventoryPage() {
     }
   };
 
-  const columns: TableProps<InventoryMovement>["columns"] = [
+  const columns: TableColumnsType<InventoryMovement> = [
     {
       title: t("pages.warehouse.inventory.colProduct"),
       key: "product",
@@ -127,6 +131,25 @@ export default function InventoryPage() {
       render: (v: string) => formatDateTime(v),
     },
   ];
+
+  if (canMutate) {
+    columns.push({
+      title: t("common.actions"),
+      key: "actions",
+      width: 100,
+      render: (_: unknown, r: InventoryMovement) => (
+        <Button
+          size="small"
+          onClick={() => {
+            setAdjustItem(r);
+            setAdjustOpen(true);
+          }}
+        >
+          Adjust
+        </Button>
+      ),
+    });
+  }
 
   return (
     <Card
@@ -222,6 +245,13 @@ export default function InventoryPage() {
           </Form.Item>
         </Form>
       </Drawer>
+
+      <StockAdjustModal
+        open={adjustOpen}
+        item={adjustItem}
+        onClose={() => setAdjustOpen(false)}
+        onSuccess={() => list.refresh()}
+      />
     </Card>
   );
 }

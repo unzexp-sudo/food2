@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Button,
   Card,
   DatePicker,
   Select,
@@ -12,6 +13,7 @@ import { api, type Page } from "../../api/client";
 import { useList } from "../../api/hooks";
 import { formatDate, formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
+import PoReceiveModal from "./PoReceiveModal";
 
 interface Wholesaler {
   id: string;
@@ -47,6 +49,10 @@ export default function PurchaseOrdersPage() {
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [wholesalerFilter, setWholesalerFilter] = useState<string | undefined>();
   const [deliveryFilter, setDeliveryFilter] = useState<string | undefined>();
+  const [receivePoId, setReceivePoId] = useState<string | null>(null);
+  const [receiveOpen, setReceiveOpen] = useState(false);
+
+  const RECEIVABLE_PO_STATUSES = ["sent", "partially_received"];
 
   const params = useMemo(
     () => ({
@@ -108,6 +114,24 @@ export default function PurchaseOrdersPage() {
       width: 130,
       render: (v: string | null | undefined) => (v ? formatDate(v) : "—"),
     },
+    {
+      title: pickName(lang, "Actions", "操作"),
+      key: "actions",
+      width: 110,
+      render: (_: unknown, r: PurchaseOrder) => (
+        <Button
+          size="small"
+          disabled={!RECEIVABLE_PO_STATUSES.includes(r.status)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setReceivePoId(r.id);
+            setReceiveOpen(true);
+          }}
+        >
+          {pickName(lang, "Receive", "收货")}
+        </Button>
+      ),
+    },
   ];
 
   return (
@@ -163,6 +187,12 @@ export default function PurchaseOrdersPage() {
             list.setPageSize(ps);
           },
         }}
+      />
+      <PoReceiveModal
+        open={receiveOpen}
+        poId={receivePoId}
+        onClose={() => setReceiveOpen(false)}
+        onSuccess={() => list.refresh()}
       />
     </Card>
   );

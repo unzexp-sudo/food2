@@ -19,6 +19,8 @@ import { api, type Page } from "../../api/client";
 import { useList, useMutate } from "../../api/hooks";
 import { pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
+import ProductDetailDrawer from "./ProductDetailDrawer";
+import type { ProductDetail } from "./ProductDetailDrawer";
 
 interface Product {
   id: string;
@@ -70,6 +72,8 @@ function ProductsTab() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailTarget, setDetailTarget] = useState<ProductDetail | null>(null);
   const [form] = Form.useForm();
   const { loading: mutateLoading, run } = useMutate();
 
@@ -165,6 +169,9 @@ function ProductsTab() {
       width: 200,
       render: (_: unknown, r: Product) => (
         <Space size="small">
+          <Button size="small" onClick={() => { setDetailTarget(r); setDetailOpen(true); }}>
+            {"View"}
+          </Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>
             {t("common.edit")}
           </Button>
@@ -315,6 +322,13 @@ function ProductsTab() {
           </Form.Item>
         </Form>
       </Drawer>
+
+      <ProductDetailDrawer
+        open={detailOpen}
+        productId={detailTarget?.id ?? null}
+        initial={detailTarget}
+        onClose={() => setDetailOpen(false)}
+      />
 
       <Button
         type="primary"

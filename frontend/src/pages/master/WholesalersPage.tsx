@@ -21,6 +21,7 @@ import { api, type Page } from "../../api/client";
 import { useList, useMutate } from "../../api/hooks";
 import { pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
+import WholesalerDetailDrawer from "./WholesalerDetailDrawer";
 
 interface Wholesaler {
   id: string;
@@ -73,6 +74,8 @@ function WholesalersTab() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<Wholesaler | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [viewing, setViewing] = useState<Wholesaler | null>(null);
   const [form] = Form.useForm();
   const { loading: mutateLoading, run } = useMutate();
 
@@ -88,6 +91,11 @@ function WholesalersTab() {
     form.resetFields();
     form.setFieldsValue(w);
     setEditOpen(true);
+  };
+
+  const openView = (w: Wholesaler) => {
+    setViewing(w);
+    setDetailOpen(true);
   };
 
   const handleSave = async () => {
@@ -161,6 +169,9 @@ function WholesalersTab() {
       width: 200,
       render: (_: unknown, r: Wholesaler) => (
         <Space size="small">
+          <Button size="small" onClick={() => openView(r)}>
+            View
+          </Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>
             {t("common.edit")}
           </Button>
@@ -251,6 +262,12 @@ function WholesalersTab() {
           </Form.Item>
         </Form>
       </Drawer>
+
+      <WholesalerDetailDrawer
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        wholesaler={viewing}
+      />
     </>
   );
 }

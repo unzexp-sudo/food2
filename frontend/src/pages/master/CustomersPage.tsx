@@ -19,6 +19,7 @@ import { api, type Page } from "../../api/client";
 import { useList, useMutate } from "../../api/hooks";
 import { pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
+import CustomerDetailDrawer from "./CustomerDetailDrawer";
 
 interface Customer {
   id: string;
@@ -82,6 +83,10 @@ export default function CustomersPage() {
   // Detail drawer (contacts + aliases)
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
+
+  // View drawer (customer fields + recent orders)
+  const [viewOpen, setViewOpen] = useState(false);
+  const [viewCustomer, setViewCustomer] = useState<Customer | null>(null);
   const [tab, setTab] = useState("contacts");
   const [contacts, setContacts] = useState<CustomerContact[]>([]);
   const [aliases, setAliases] = useState<CustomerAlias[]>([]);
@@ -112,6 +117,11 @@ export default function CustomersPage() {
     form.resetFields();
     form.setFieldsValue(c);
     setEditOpen(true);
+  };
+
+  const openView = (c: Customer) => {
+    setViewCustomer(c);
+    setViewOpen(true);
   };
 
   const handleSave = async () => {
@@ -310,6 +320,7 @@ export default function CustomersPage() {
       width: 200,
       render: (_: unknown, r: Customer) => (
         <Space size="small">
+          <Button size="small" onClick={() => openView(r)}>View</Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>
             {t("common.edit")}
           </Button>
@@ -581,6 +592,12 @@ export default function CustomersPage() {
           ]}
         />
       </Drawer>
+
+      <CustomerDetailDrawer
+        open={viewOpen}
+        customer={viewCustomer}
+        onClose={() => setViewOpen(false)}
+      />
 
       <Drawer
         title={

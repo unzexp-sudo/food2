@@ -12,8 +12,10 @@ import {
 } from "antd";
 import { useLanguage } from "../../i18n";
 import { api, type Page } from "../../api/client";
+import { useList } from "../../api/hooks";
 import { pickName } from "../../utils/format";
 import { formatDate } from "../../utils/format";
+import StatementGenerateModal from "./StatementGenerateModal";
 interface Customer {
   id: string;
   name_en: string;
@@ -286,8 +288,18 @@ function WholesalerAP() {
 
 export default function StatementsPage() {
   const { t } = useLanguage();
+  const customerList = useList<Customer>("/customers", { page: 1, page_size: 100 });
+  const [genOpen, setGenOpen] = useState(false);
+
   return (
-    <Card title={t("pages.finance.statements.title")}>
+    <Card
+      title={t("pages.finance.statements.title")}
+      extra={
+        <Button type="primary" onClick={() => setGenOpen(true)}>
+          Generate
+        </Button>
+      }
+    >
       <Tabs
         defaultActiveKey="customer"
         items={[
@@ -302,6 +314,13 @@ export default function StatementsPage() {
             children: <WholesalerAP />,
           },
         ]}
+      />
+      <StatementGenerateModal
+        open={genOpen}
+        customers={customerList.items}
+        loadingCustomers={customerList.loading}
+        onClose={() => setGenOpen(false)}
+        onGenerated={customerList.refresh}
       />
     </Card>
   );

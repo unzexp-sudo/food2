@@ -3,7 +3,6 @@ import {
   Button,
   Card,
   DatePicker,
-  Descriptions,
   Drawer,
   Form,
   Input,
@@ -12,7 +11,6 @@ import {
   Select,
   Space,
   Table,
-  Typography,
   Upload,
   type TableProps,
   type UploadFile,
@@ -21,7 +19,7 @@ import {
 import {
   CarOutlined,
   CheckOutlined,
-  PaperClipOutlined,
+  EyeOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
@@ -32,9 +30,10 @@ import StatusTag from "../../components/StatusTag";
 import client from "../../api/client";
 import { getMessage } from "../../api/message";
 import { parseStoredUser } from "../../types";
+import DeliveryDetailDrawer from "./DeliveryDetailDrawer";
 
 /** Entity shapes per AGENT_CONTRACTS §4. */
-interface Delivery {
+export interface Delivery {
   id: string;
   delivery_number: string;
   order_id: string;
@@ -60,7 +59,7 @@ interface Delivery {
   } | null;
   lines: DeliveryLine[];
 }
-interface DeliveryLine {
+export interface DeliveryLine {
   id: string;
   order_line_id: string | null;
   product_name_en: string;
@@ -312,6 +311,9 @@ export default function DeliveryPage() {
       width: 280,
       render: (_: unknown, r: Delivery) => (
         <Space size="small" wrap>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => handleRow(r.id)}>
+            View
+          </Button>
           {canAssign && (r.status === "scheduled" || r.status === "picked") && (
             <Button size="small" icon={<UserOutlined />} onClick={() => openAssign(r.id)}>
               {t("pages.delivery.assignDriver")}
@@ -342,27 +344,6 @@ export default function DeliveryPage() {
             )}
         </Space>
       ),
-    },
-  ];
-
-  const lineCols: TableProps<DeliveryLine>["columns"] = [
-    {
-      title: t("pages.delivery.colLineProduct"),
-      key: "product",
-      render: (_: unknown, r: DeliveryLine) => pickName(lang, r.product_name_en, r.product_name_zh),
-    },
-    {
-      title: t("pages.delivery.colLineQty"),
-      dataIndex: "quantity",
-      width: 100,
-      align: "right" as const,
-    },
-    {
-      title: t("pages.delivery.colLineDelivered"),
-      dataIndex: "delivered_quantity",
-      width: 100,
-      align: "right" as const,
-      render: (v: number) => v ?? 0,
     },
   ];
 
@@ -454,101 +435,14 @@ export default function DeliveryPage() {
         }}
       />
 
-      <Drawer
-        title={t("pages.delivery.details")}
+      <DeliveryDetailDrawer
+        delivery={detail}
         open={detailOpen}
-        onClose={() => setDetailOpen(false)}
-        width={760}
-      >
-        {detail ? (
-          <>
-            <Descriptions size="small" column={2} bordered>
-              <Descriptions.Item label={t("pages.delivery.colDeliveryNumber")}>
-                {detail.delivery_number}
-              </Descriptions.Item>
-              <Descriptions.Item label={t("pages.delivery.colOrder")}>
-                {detail.order_number}
-              </Descriptions.Item>
-              <Descriptions.Item label={t("pages.delivery.colCustomer")}>
-                {pickName(lang, detail.customer_name_en, detail.customer_name_zh)}
-              </Descriptions.Item>
-              <Descriptions.Item label={t("pages.delivery.colRoute")}>
-                {detail.route ?? "—"}
-              </Descriptions.Item>
-              <Descriptions.Item label={t("pages.delivery.colDriver")}>
-                {detail.driver_name ?? "—"}
-              </Descriptions.Item>
-              <Descriptions.Item label={t("pages.delivery.colStatus")}>
-                <StatusTag domain="delivery" value={detail.status} />
-              </Descriptions.Item>
-              <Descriptions.Item label={t("pages.delivery.colScheduled")}>
-                {formatDate(detail.scheduled_date)}
-              </Descriptions.Item>
-              <Descriptions.Item label={t("pages.delivery.colPickedAt")}>
-                {detail.picked_at ? formatDateTime(detail.picked_at) : "—"}
-              </Descriptions.Item>
-              <Descriptions.Item label={t("pages.delivery.colOutAt")}>
-                {detail.out_at ? formatDateTime(detail.out_at) : "—"}
-              </Descriptions.Item>
-              <Descriptions.Item label={t("pages.delivery.colDeliveredAt")}>
-                {detail.delivered_at ? formatDateTime(detail.delivered_at) : "—"}
-              </Descriptions.Item>
-            </Descriptions>
-
-            <Typography.Title level={5} style={{ marginTop: 16 }}>
-              {t("pages.delivery.lines")}
-            </Typography.Title>
-            <Table<DeliveryLine>
-              rowKey="id"
-              size="small"
-              pagination={false}
-              dataSource={detail.lines}
-              columns={lineCols}
-            />
-
-            <Typography.Title level={5} style={{ marginTop: 16 }}>
-              {t("pages.delivery.pod")}
-            </Typography.Title>
-            {detail.pod ? (
-              <Descriptions size="small" column={1} bordered>
-                <Descriptions.Item label={t("pages.delivery.podReceivedBy")}>
-                  {detail.pod.received_by ?? "—"}
-                </Descriptions.Item>
-                <Descriptions.Item label={t("pages.delivery.podGps")}>
-                  {detail.pod.gps_lat != null && detail.pod.gps_lng != null
-                    ? `${detail.pod.gps_lat}, ${detail.pod.gps_lng}`
-                    : "—"}
-                </Descriptions.Item>
-                <Descriptions.Item label={t("pages.delivery.podDeliveredAt")}>
-                  {detail.pod.delivered_at ? formatDateTime(detail.pod.delivered_at) : "—"}
-                </Descriptions.Item>
-                {detail.pod.photo_url && (
-                  <Descriptions.Item label={t("pages.delivery.podPhoto")}>
-                    <a
-                      onClick={() => {
-                        // Download the POD photo with auth headers (binary).
-                        client
-                          .get(`/deliveries/${detail.id}/photo`, { responseType: "blob" })
-                          .then((res) => {
-                            const url = URL.createObjectURL(res.data as Blob);
-                            window.open(url, "_blank");
-                          })
-                          .catch(() => {});
-                      }}
-                    >
-                      <PaperClipOutlined /> {t("pages.delivery.viewPhoto")}
-                    </a>
-                  </Descriptions.Item>
-                )}
-              </Descriptions>
-            ) : (
-              <Typography.Text type="secondary">{t("pages.delivery.noPod")}</Typography.Text>
-            )}
-          </>
-        ) : (
-          <Typography.Text type="secondary">{t("common.loading")}</Typography.Text>
-        )}
-      </Drawer>
+        onClose={() => {
+          setDetailOpen(false);
+          setDetail(null);
+        }}
+      />
 
       <Modal
         title={t("pages.delivery.assignDriverTitle")}

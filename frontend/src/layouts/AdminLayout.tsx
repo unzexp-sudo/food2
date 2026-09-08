@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Layout, Menu, Segmented, Tag, Typography, Button } from "antd";
+import { Layout, Menu, Segmented, Tag, Typography, Button, Switch } from "antd";
 import {
   InboxOutlined,
   FileTextOutlined,
@@ -18,6 +18,7 @@ import {
   ShopOutlined,
   BookOutlined,
   ScheduleOutlined,
+  TagsOutlined,
   UserOutlined,
   AuditOutlined,
   SettingOutlined,
@@ -25,9 +26,12 @@ import {
   WechatOutlined,
   MessageOutlined,
   NotificationOutlined,
+  SunOutlined,
+  MoonOutlined,
 } from "@ant-design/icons";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useLanguage, type Lang } from "../i18n";
+import { useThemeMode } from "../theme-context";
 import { parseStoredUser, type CurrentUser, type Role } from "../types";
 
 const { Header, Sider, Content } = Layout;
@@ -60,6 +64,7 @@ const MENU_GROUPS: MenuGroupDef[] = [
       { key: "/orders", labelKey: "nav.orders", icon: <FileTextOutlined />, roles: ["admin", "ops", "finance"] },
       { key: "/consolidation", labelKey: "nav.consolidation", icon: <MergeOutlined />, roles: ["admin", "ops"] },
       { key: "/purchase-orders", labelKey: "nav.purchaseOrders", icon: <ShoppingCartOutlined />, roles: ["admin", "ops"] },
+      { key: "/sales/quotations", labelKey: "nav.quotations", icon: <TagsOutlined />, roles: ["admin", "ops", "finance"] },
     ],
   },
   {
@@ -128,6 +133,7 @@ const ROLE_TAG_COLORS: Record<Role, string> = {
 
 export default function AdminLayout() {
   const { t, lang, setLang } = useLanguage();
+  const { mode, setMode } = useThemeMode();
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
@@ -181,10 +187,17 @@ export default function AdminLayout() {
           paddingInline: 24,
         }}
       >
-        <Typography.Title level={4} style={{ color: "#fff", margin: 0, whiteSpace: "nowrap" }}>
+        <Typography.Title level={4} style={{ margin: 0, whiteSpace: "nowrap" }}>
           {t("app.title")}
         </Typography.Title>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <Switch
+            checked={mode === "dark"}
+            onChange={(checked) => setMode(checked ? "dark" : "light")}
+            checkedChildren={<MoonOutlined />}
+            unCheckedChildren={<SunOutlined />}
+            title={mode === "dark" ? t("theme.light") : t("theme.dark")}
+          />
           <Segmented<Lang>
             value={lang}
             onChange={(value) => setLang(value)}
@@ -193,14 +206,9 @@ export default function AdminLayout() {
               { label: "中文", value: "zh" },
             ]}
           />
-          <Typography.Text style={{ color: "rgba(255, 255, 255, 0.85)" }}>{user.name}</Typography.Text>
+          <Typography.Text>{user.name}</Typography.Text>
           <Tag color={ROLE_TAG_COLORS[user.role]}>{t(`roles.${user.role}`)}</Tag>
-          <Button
-            type="text"
-            icon={<LogoutOutlined />}
-            onClick={handleLogout}
-            style={{ color: "rgba(255, 255, 255, 0.85)" }}
-          />
+          <Button type="text" icon={<LogoutOutlined />} onClick={handleLogout} />
         </div>
       </Header>
       <Layout>

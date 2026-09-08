@@ -20,6 +20,7 @@ import ProductsPage from "./pages/master/ProductsPage";
 import WholesalersPage from "./pages/master/WholesalersPage";
 import ContractsPage from "./pages/master/ContractsPage";
 import StandingOrdersPage from "./pages/master/StandingOrdersPage";
+import QuotationsPage from "./pages/sales/QuotationsPage";
 import UsersPage from "./pages/system/UsersPage";
 import AuditPage from "./pages/system/AuditPage";
 import SettingsPage from "./pages/system/SettingsPage";
@@ -71,6 +72,7 @@ export function AppRoutes() {
             <Route path="/master/wholesalers" element={<WholesalersPage />} />
             <Route path="/master/contracts" element={<ContractsPage />} />
             <Route path="/master/standing-orders" element={<StandingOrdersPage />} />
+            <Route path="/sales/quotations" element={<QuotationsPage />} />
             <Route path="/system/users" element={<UsersPage />} />
             <Route path="/system/audit" element={<AuditPage />} />
             <Route path="/system/settings" element={<SettingsPage />} />
