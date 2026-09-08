@@ -67,6 +67,8 @@ for module in (
 # Outbound WeCom notification handlers (docs/WECOM_CONTRACTS.md §7).
 # Imported LAST so its `order.draft_created` handler runs after the orders
 # module's auto-confirm handler and can read the settled order status.
+# `from package import submodule` imports the wecom_notify module for its side
+# effects (registering @on handlers) WITHOUT rebinding the `app` name.
 from app.services.notify import wecom_notify  # noqa: E402,F401
 
 
@@ -82,9 +84,25 @@ def health():
 STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 if STATIC_DIR.is_dir():
     # Vite emits hashed assets under /assets/...; serve them as static files.
-    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+    # Guard BOTH the assets dir and index.html: a missing/partial frontend
+    # build must NOT crash the whole app — the API must stay up. (A bare
+    # StaticFiles() mount raises at import time if its directory is absent,
+    # which would hard-crash uvicorn in the container.)
+    import logging
 
-    @app.get("/{full_path:path}", include_in_schema=False)
-    def spa_fallback(full_path: str):  # noqa: ARG001
-        """SPA fallback: serve index.html for any non-API route."""
-        return FileResponse(STATIC_DIR / "index.html")
+    _log = logging.getLogger("erp.main")
+    _assets_dir = STATIC_DIR / "assets"
+    _index_html = STATIC_DIR / "index.html"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+    else:
+        _log.warning(
+            "SPA assets dir not found at %s — serving API only (no static UI).",
+            _assets_dir,
+        )
+    if _index_html.is_file():
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        def spa_fallback(full_path: str):  # noqa: ARG001
+            """SPA fallback: serve index.html for any non-API route."""
+            return FileResponse(_index_html)

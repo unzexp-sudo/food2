@@ -5,6 +5,7 @@ Run:  cd backend && python seed.py
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 
 from sqlalchemy.orm import Session
@@ -16,6 +17,8 @@ from app.models import (
     CustomerProductAlias,
     Product,
     ProductCategory,
+    Quotation,
+    QuotationLine,
     StandingOrderTemplate,
     StandingOrderTemplateLine,
     SupplierRule,
@@ -214,6 +217,57 @@ def seed(db: Session) -> bool:
         SystemSetting(key="auto_invoice", value={"enabled": True},
                       description="Auto-generate invoice on delivery confirmation"),
     ])
+
+    # --- Sales quotations (Guanmai "in-sale" replica demo) -------------------------
+    from app.core.numbers import next_number
+
+    _admin = users[0]
+
+    def add_quotation(customer, ext_name, service_time, tags, lines):
+        """lines: list of (Product, quantity, unit_id, unit_price)."""
+        code = next_number(db, Quotation, "code", "Q")
+        q = Quotation(
+            code=code,
+            customer_id=customer.id,
+            status="active",
+            external_name=ext_name,
+            service_time=service_time,
+            pricing_cycle="daily",
+            tags=json.dumps(tags),
+            description=None,
+            created_by=_admin.id,
+        )
+        db.add(q)
+        db.flush()
+        for i, (prod, qty, unit_id, price) in enumerate(lines, start=1):
+            db.add(QuotationLine(
+                quotation_id=q.id,
+                line_no=i,
+                product_id=prod.id,
+                product_display=f"{prod.name_en} / {prod.name_zh}",
+                quantity=qty,
+                unit_id=unit_id,
+                unit_price=price,
+            ))
+
+    add_quotation(
+        cust1, "东方市场早市报价", "morning", ["school", "daily"],
+        [(by_sku["VG001"], 50.0, units["jin"].id, 2.2),
+         (by_sku["VG002"], 30.0, units["jin"].id, 1.5),
+         (by_sku["RG001"], 2.0, units["bag"].id, 58.0)],
+    )
+    add_quotation(
+        cust2, "金龙酒家午市报价", "afternoon", ["restaurant"],
+        [(by_sku["MT001"], 10.0, units["jin"].id, 19.0),
+         (by_sku["MT004"], 5.0, units["jin"].id, 33.0),
+         (by_sku["VG003"], 8.0, units["jin"].id, 3.2)],
+    )
+    add_quotation(
+        cust3, "南海食堂晚市报价", "evening", ["canteen"],
+        [(by_sku["RG001"], 3.0, units["bag"].id, 57.0),
+         (by_sku["RG004"], 20.0, units["jin"].id, 5.4),
+         (by_sku["CD001"], 2.0, units["box"].id, 15.0)],
+    )
 
     db.commit()
     return True

@@ -7,6 +7,7 @@ from app.models.finance import Invoice, InvoiceLine, Payment
 from app.models.intake import IntakeDocument, IntakeExtraction, IntakeJob
 from app.models.order import Order, OrderLine
 from app.models.product import Product, ProductCategory, Unit
+from app.models.quotation import Quotation, QuotationLine
 from app.models.procurement import (
     ConsolidationBatch,
     ConsolidationBatchLine,
@@ -32,6 +33,7 @@ __all__ = [
     "IntakeDocument", "IntakeExtraction", "IntakeJob",
     "Order", "OrderLine",
     "Product", "ProductCategory", "Unit",
+    "Quotation", "QuotationLine",
     "ConsolidationBatch", "ConsolidationBatchLine", "PurchaseOrder", "PurchaseOrderLine",
     "User",
     "InboundReceipt", "InboundReceiptLine", "InventoryMovement", "PickLine", "PickList",
