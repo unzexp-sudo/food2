@@ -189,7 +189,7 @@ export default function AdminLayout() {
             value={lang}
             onChange={(value) => setLang(value)}
             options={[
-              { label: "EN", value: "en" },
+              { label: "English", value: "en" },
               { label: "中文", value: "zh" },
             ]}
           />
