@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+
+# Node
+node_modules/
+dist/
+*.local
+
+# WorkBuddy local project metadata and memory
+.workbuddy-ai/
+
+# App data
+backend/data/
+backend/*.db
+backend/*.db-journal
+data/
+*.db
+*.db-journal
+
+# Env
+.env
+.env.local
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
