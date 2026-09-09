@@ -110,6 +110,18 @@ def health():
     return {"status": "ok", "app": settings.app_name}
 
 
+# Undefined /api/* paths must return a JSON 404 — NOT the SPA HTML. The
+# catch-all route below would otherwise serve index.html (text/html, 200) for
+# any /api/... path the backend doesn't define, which makes the frontend's
+# `fetch(...).json()` throw a SyntaxError on boot and leaves the page
+# completely blank. Registering this BEFORE the catch-all ensures the SPA
+# always gets a real JSON 404 it can handle. Defined /api routes (registered
+# above via the v1 routers and /api/health) still take precedence and win.
+@app.get("/api/{path:path}", include_in_schema=False)
+def api_not_found(path: str) -> JSONResponse:  # noqa: ARG001
+    return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+
 # ---- Serve the compiled React SPA (frontend/dist copied to /app/static) ----
 # In the production Docker image /app/static is always present (built in
 # stage 1 of the root Dockerfile). In local dev without a frontend build
