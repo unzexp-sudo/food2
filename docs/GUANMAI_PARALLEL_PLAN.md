@@ -161,5 +161,160 @@ cd frontend && npm run build -- --outDir dist_verify && rm -rf dist_verify
   branding (not requested; left as-is to preserve functionality).
 - Live end-to-end test requires the user's Docker/`docker compose` stack
   (sandbox has no Docker/Postgres/FastAPI runtime).
-- When ready: `git push` to `unzexp-sudo/food2` per the established push path
-  (keychain stores the unzexp-sudo PAT; do NOT use the foreign `htjani` token).
+- Push path correction: the macOS keychain holds a GitHub token for account
+  **`htjani`**, **not** `unzexp-sudo`. `git push` to `unzexp-sudo/*` 403s with the
+  htjani token. For `unzexp-sudo/food2` and `unzexp-sudo/WeCom1` you must either
+  push with the `unzexp-sudo` account's PAT or add that PAT to the keychain first.
+  See §9.9 for the ordered checklist.
+
+---
+
+## 9. Deploy Guide — Namecheap domain + Railway (food2 ERP **and** WeCom1 gateway)
+
+> Both apps run as **separate Railway projects** and get **separate subdomains**
+> on one Namecheap domain (e.g. `erp.yourdomain.com` and `wecom.yourdomain.com`).
+> They talk to each other over HTTPS using two shared secrets.
+
+### 9.1 What was already fixed for deploy (read this first)
+Both apps were failing Railway's healthcheck with the generic
+*"Application failed to respond"* page. Root cause was **not** missing env vars —
+it was a missing **Postgres driver** in the production image while the DB URL was
+a `postgresql+psycopg2://` string. `sqlalchemy.create_engine(...)` resolves that
+dialect **at import time**, so without the driver the app crashed before uvicorn
+bound to `PORT`.
+
+- **food2 ERP** — fixed + pushed in `8965ce9`: `psycopg2-binary>=2.9` added to
+  `backend/requirements.txt`; `lifespan` in `backend/app/main.py` wrapped in
+  `try/except` so a transient DB error can't take the container down.
+- **WeCom1 gateway** — fixed + committed **locally** as `1b26900` (same two
+  changes). ⚠️ Not yet pushed: `git push` to `unzexp-sudo/WeCom1` 403s because the
+  only cached GitHub token is for account `htjani`, which lacks push access. Push
+  with the `unzexp-sudo` account (or add its PAT to the keychain) before Railway
+  can rebuild it.
+
+### 9.2 Prerequisites
+- A Namecheap domain you control (e.g. `yourdomain.com`).
+- A Railway account; GitHub repos `unzexp-sudo/food2` (the `Foshan1` tree) and
+  `unzexp-sudo/WeCom1` connected to Railway.
+- `openssl` available locally (for `ERP_SECRET_KEY`).
+- The two shared secrets agreed between the apps (see §9.5).
+
+### 9.3 Railway project setup
+
+**food2 ERP** (Dockerfile builder):
+1. New Project → Deploy from GitHub repo `unzexp-sudo/food2` (root, not a subdir).
+2. Railway reads `railway.toml` → builder `DOCKERFILE`. The `Dockerfile` builds the
+   React SPA in stage 1 and runs FastAPI (API **+** SPA) in stage 2 on
+   `${PORT:-8000}`. No extra build settings needed.
+3. Add the **PostgreSQL** plugin (creates a `PostgreSQL` service in the project).
+   Railway auto-injects `DATABASE_URL` into the web service — but food2 reads
+   `ERP_DATABASE_URL`, so either (a) set `ERP_DATABASE_URL` to the plugin's
+   connection string, or (b) leave it unset and food2 falls back to SQLite
+   (ephemeral on Railway's filesystem — fine for a demo, loses data on restart).
+4. Healthcheck is already configured: `healthcheckPath = "/api/health"`,
+   `healthcheckTimeout = 30`, `restartPolicyType = "ON_FAILURE"`.
+5. Deploy. Railway gives a default `https://food2-<env>.up.railway.app` domain.
+
+**WeCom1 gateway** (Nixpacks builder):
+1. New Project → Deploy from GitHub repo `unzexp-sudo/WeCom1`.
+2. Railway reads `railway.toml` → builder `NIXPACKS`, `startCommand =
+   uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8100}`.
+   `requirements.txt` now contains `psycopg2-binary>=2.9` so the
+   `postgresql+psycopg2` dialect resolves.
+3. Add the **PostgreSQL** plugin; set `WECOM_DATABASE_URL` to its connection
+   string (or leave unset → SQLite fallback).
+4. Healthcheck: `healthcheckPath = "/wecom/health"`, `healthcheckTimeout = 30`,
+   `restartPolicyType = "ON_FAILURE"`.
+5. Deploy after the `1b26900` push (see §9.1 warning).
+
+### 9.4 Environment variables
+
+**food2 ERP** (set in Railway → Service → Variables):
+| Variable | Example / note |
+|---|---|
+| `ERP_DATABASE_URL` | Railway Postgres plugin connection string, **or** unset → SQLite fallback |
+| `ERP_SECRET_KEY` | `openssl rand -hex 32` (generate once, keep it) |
+| `ERP_AI_PROVIDER` | `mock` (default, no external calls) or `openai` |
+| `ERP_OPENAI_API_KEY` | only if `ERP_AI_PROVIDER=openai` |
+| `ERP_ALIYUN_ACCESS_KEY_ID` | live OCR only (Aliyun `RecognizeAdvanced`) |
+| `ERP_ALIYUN_ACCESS_KEY_SECRET` | live OCR only |
+| `ERP_QWEN_API_KEY` | live OCR only (Qwen-VL-Max) |
+| `ERP_SERVICE_KEY` | shared secret the gateway presents; must equal WeCom1 `WECOM_ERP_API_KEY` |
+| `ERP_WECOM_GATEWAY_URL` | `https://wecom.yourdomain.com` (or the WeCom1 Railway domain) |
+| `ERP_WECOM_GATEWAY_KEY` | shared secret ERP presents to gateway; must equal `WECOM_GATEWAY_SERVICE_KEY` |
+| `ERP_NOTIFY_ENABLED` | `true` / `false` |
+| `ERP_CORS_ORIGINS` | `https://erp.yourdomain.com` (the SPA is same-origin, but set for safety) |
+| `ERP_ACCESS_TOKEN_EXPIRE_MINUTES` | `720` |
+| `ERP_FILES_DIR` | leave default (filesystem is ephemeral on Railway) |
+| `VITE_WECOM_GATEWAY_URL` | **build** variable: `https://wecom.yourdomain.com` (consumed by Vite at build) |
+
+**WeCom1 gateway** (set in Railway → Service → Variables):
+| Variable | Example / note |
+|---|---|
+| `WECOM_DATABASE_URL` | Postgres plugin string, **or** unset → SQLite fallback |
+| `WECOM_MODE` | `mock` (default) until going live |
+| `WECOM_CORP_ID` / `WECOM_AGENT_ID` / `WECOM_SECRET` / `WECOM_TOKEN` / `WECOM_ENCODING_AES_KEY` | live WeCom only |
+| `WECOM_DECRYPT_PROVIDER` | `pure` (RSA/AES via `cryptography`, no vendor binary) |
+| `WECOM_STAFF_USERIDS` / `WECOM_ORDER_GROUP_IDS` / `WECOM_INTERNAL_OPS_CHAT_ID` | routing; set before live |
+| `WECOM_SEND_ALLOWLIST` | empty in mock; set your own userid for the first live send |
+| `WECOM_ERP_BASE_URL` | `https://erp.yourdomain.com` (or the food2 Railway domain) |
+| `WECOM_ERP_API_KEY` | must equal food2 `ERP_SERVICE_KEY` |
+| `WECOM_GATEWAY_SERVICE_KEY` | must equal food2 `ERP_WECOM_GATEWAY_KEY` |
+| `WECOM_CORS_ORIGINS` | `https://erp.yourdomain.com` (the WeCom console calls the gateway directly from the browser) |
+| `WECOM_MEDIA_URL_BASE` | `https://wecom.yourdomain.com/wecom/media` (so the ERP can fetch attachments) |
+
+### 9.5 The two shared secrets (must match on both sides)
+- **ERP ↔ gateway handshake (inbound orders):** food2 `ERP_SERVICE_KEY`
+  **==** WeCom1 `WECOM_ERP_API_KEY`. A mismatch 401s every inbound order.
+- **ERP → gateway outbound (notifications):** food2 `ERP_WECOM_GATEWAY_KEY`
+  **==** WeCom1 `WECOM_GATEWAY_SERVICE_KEY`.
+Generate each once (e.g. `openssl rand -hex 16`) and set on **both** services.
+
+### 9.6 Namecheap custom domain (one domain, two subdomains)
+1. In **Railway**, for each service → Settings → **Domains** → **Add Domain**:
+   - food2 → `erp.yourdomain.com`
+   - WeCom1 → `wecom.yourdomain.com`
+   Railway returns a **DNS target** (e.g. `cname.railway.app` or the service's
+   `*.up.railway.app` host). Copy it.
+2. In **Namecheap** → Domain List → Manage → **Advanced DNS** → **Add New Record**:
+   - Type **CNAME**, Host `erp`, Value `<food2 Railway target>`, TTL Auto.
+   - Type **CNAME**, Host `wecom`, Value `<WeCom1 Railway target>`, TTL Auto.
+   (For the root/apex domain use an **ALIAS** record pointing at the Railway
+   target instead of CNAME.)
+3. Wait for propagation (minutes to an hour). Railway auto-provisions a TLS
+   certificate (Let's Encrypt) once the CNAME is verified — the domain shows a
+   green check.
+4. Set the cross-referencing variables from §9.4/§9.5 to the new `https://…`
+   URLs and **Redeploy** both services.
+
+### 9.7 Verify it's actually live
+- food2: `curl -fsS https://erp.yourdomain.com/api/health` → `{"status":"ok",…}`.
+- WeCom1: `curl -fsS https://wecom.yourdomain.com/wecom/health` → `{"status":"ok",…}`.
+- In Railway, the service is **Healthy** (no "Application failed to respond").
+- End-to-end smoke (mock mode): WeCom1 forwards a simulated message → food2
+  creates an intake job → OCR gate flags handwritten notes for review.
+
+### 9.8 Troubleshooting
+- **"Application failed to respond"** → almost always an import-time crash. Open
+  the Railway deploy logs; look for `ModuleNotFoundError: No module named
+  'psycopg2'` or a dialect error. Fix = ensure the driver is in `requirements.txt`
+  (done for both) and harden `lifespan` (done). A DB blip alone should no longer
+  kill the container.
+- **Healthcheck times out** → confirm the path matches the `railway.toml`
+  `healthcheckPath` (`/api/health` for food2, `/wecom/health` for WeCom1) and that
+  the app binds to `${PORT}` (Railway injects `PORT`).
+- **401 on inbound orders** → the two `ERP_SERVICE_KEY` / `WECOM_ERP_API_KEY`
+  values don't match.
+- **CORS errors in the WeCom console** → `WECOM_CORS_ORIGINS` must include the
+  browser origin the operator opens the console from.
+- **Data disappears after restart** → you're on the SQLite fallback; attach the
+  Postgres plugin and set the `*_DATABASE_URL` to its string.
+
+### 9.9 Push checklist (do this in order)
+1. `cd /Users/harshjani/Documents/WeCom1 && git push origin main`  ← needs the
+   `unzexp-sudo` PAT (htjani token is denied). This triggers the WeCom1 rebuild.
+2. Confirm food2 already rebuilt from `8965ce9` (it was pushed earlier).
+3. Set all variables in §9.4, the two secrets in §9.5.
+4. Wire Namecheap CNAMEs (§9.6), wait for TLS, redeploy both.
+5. Run the §9.7 health curls.
+
