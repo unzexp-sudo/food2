@@ -26,6 +26,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.audit import log_audit
 from app.core.database import get_db
 from app.core.deps import require_roles
 from app.core.events import emit
@@ -34,6 +35,7 @@ from app.models import Invoice, User
 from app.schemas.finance import (
     InvoiceGenerateIn,
     PaymentCreateIn,
+    StatementGenerateIn,
 )
 from app.services.finance import invoices as inv_svc
 from app.services.finance import margin as margin_svc
@@ -79,6 +81,43 @@ def wholesaler_statement_endpoint(
     return stmt_svc.wholesaler_statement(
         db, wholesaler_id=wholesaler_id, date_from=date_from, date_to=date_to,
     )
+
+
+@statements_router.post("/generate", response_model=None,
+                        status_code=status.HTTP_201_CREATED)
+def generate_statement_endpoint(
+    payload: StatementGenerateIn,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles("finance", "admin")),
+):
+    """Compute an AR (customer) or AP (wholesaler) statement on demand.
+
+    Mirrors the GET endpoints but exposed as an explicit generate action with an
+    audit trail; returns {rows, total} for the requested date range.
+    """
+    if payload.party_type == "wholesaler":
+        data = stmt_svc.wholesaler_statement(
+            db, wholesaler_id=payload.party_id,
+            date_from=payload.from_date, date_to=payload.to_date,
+        )
+        party_label = "wholesaler"
+    else:
+        data = stmt_svc.customer_statement(
+            db, customer_id=payload.party_id,
+            date_from=payload.from_date, date_to=payload.to_date,
+        )
+        party_label = "customer"
+    log_audit(
+        db, actor=actor,
+        entity_type="statement", entity_id=payload.party_id,
+        action="generate_statement",
+        summary=(
+            f"Generated {party_label} statement "
+            f"({payload.from_date}..{payload.to_date})"
+        ),
+    )
+    db.commit()
+    return data
 
 
 # --- Invoices -----------------------------------------------------------------

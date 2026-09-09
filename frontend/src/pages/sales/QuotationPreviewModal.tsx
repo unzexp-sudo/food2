@@ -16,7 +16,7 @@ interface Props {
 
 /** Read-only printable preview of a quotation. */
 export default function QuotationPreviewModal({ open, quotationId, quotation: preloaded, onClose }: Props) {
-  const { lang } = useLanguage();
+  const { lang, t } = useLanguage();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Quotation | null>(preloaded ?? null);
 
@@ -57,27 +57,27 @@ export default function QuotationPreviewModal({ open, quotationId, quotation: pr
 
   const columns = [
     {
-      title: "Product",
+      title: t("pages.sales.quotationPreview.product"),
       dataIndex: "product_display",
       key: "product_display",
       render: (v: string | null) => v ?? "—",
     },
-    { title: "Qty", dataIndex: "quantity", key: "quantity" },
+    { title: t("pages.sales.quotationPreview.qty"), dataIndex: "quantity", key: "quantity" },
     {
-      title: "Unit",
+      title: t("pages.sales.quotationPreview.unit"),
       dataIndex: "unit_code",
       key: "unit_code",
       render: (v: string | null) => v ?? "—",
     },
     {
-      title: "Unit Price",
+      title: t("pages.sales.quotationPreview.unitPrice"),
       dataIndex: "unit_price",
       key: "unit_price",
       align: "right" as const,
       render: (v: number | null) => (v != null ? v.toFixed(2) : "—"),
     },
     {
-      title: "Amount",
+      title: t("pages.sales.quotationPreview.amount"),
       key: "amount",
       align: "right" as const,
       render: (_: unknown, r: QuotationLine) =>
@@ -88,7 +88,7 @@ export default function QuotationPreviewModal({ open, quotationId, quotation: pr
   return (
     <Modal
       open={open}
-      title="Preview"
+      title={t("common.preview")}
       footer={null}
       width={720}
       onCancel={onClose}
@@ -105,10 +105,10 @@ export default function QuotationPreviewModal({ open, quotationId, quotation: pr
               {pickName(lang, data.customer_name_en, data.customer_name_zh)}
             </Typography.Title>
             <Space wrap size={[8, 4]}>
-              <Typography.Text type="secondary">Code: {data.code}</Typography.Text>
-              <Typography.Text type="secondary">Service Time: {data.service_time}</Typography.Text>
+              <Typography.Text type="secondary">{t("common.code")}: {data.code}</Typography.Text>
+              <Typography.Text type="secondary">{t("pages.sales.quotationPreview.serviceTime")}: {data.service_time}</Typography.Text>
               <Typography.Text type="secondary">
-                Pricing Cycle: {data.pricing_cycle ?? "—"}
+                {t("pages.sales.quotationPreview.pricingCycle")}: {data.pricing_cycle ?? "—"}
               </Typography.Text>
               {data.tags?.map((tag) => (
                 <Tag key={tag}>{tag}</Tag>
@@ -125,7 +125,7 @@ export default function QuotationPreviewModal({ open, quotationId, quotation: pr
             summary={() => (
               <Table.Summary.Row>
                 <Table.Summary.Cell index={0} colSpan={4}>
-                  <strong>Total</strong>
+                  <strong>{t("common.total")}</strong>
                 </Table.Summary.Cell>
                 <Table.Summary.Cell index={1} align="right">
                   <strong>{total.toFixed(2)}</strong>

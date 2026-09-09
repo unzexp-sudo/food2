@@ -1,0 +1,27 @@
+{
+  "id": "003_songdan_609621_edited",
+  "source_file": "003_songdan_609621_edited.jpeg",
+  "form_type": "printed_product_handwritten_values",
+  "customer": "羌剡超市",
+  "date": "2024-06-18",
+  "doc_number": "609621",
+  "expected_total": 1866,
+  "expected_requires_human_review": true,
+  "notes": "Same slip as 002, re-photographed after on-paper edits. Line 8 (洽洽瓜蒌) is marked '(已关)' = cancelled by the customer. Several box annotations changed (箱→瓶). Total unchanged at 1866. Cancellation detection is the key feature exercised here.",
+  "lines": [
+    {"product_name": "康师傅冰红茶 550ml", "unit": "件", "quantity": 6, "unit_price": 28, "amount": 280, "notes": "6瓶"},
+    {"product_name": "统一绿茶 500ml", "unit": "件", "quantity": 8, "unit_price": 24, "amount": 192, "notes": ""},
+    {"product_name": "可口可乐 330ml", "unit": "件", "quantity": 5, "unit_price": 32, "amount": 160, "notes": "32"},
+    {"product_name": "旺仔牛奶 125ml", "unit": "盒", "quantity": 10, "unit_price": 36, "amount": 360, "notes": "36"},
+    {"product_name": "达利园面包 香软", "unit": "件", "quantity": 6, "unit_price": 25, "amount": 150, "notes": "6瓶"},
+    {"product_name": "银祥记沙琪玛", "unit": "件", "quantity": 5, "unit_price": 18, "amount": 90, "notes": ""},
+    {"product_name": "双汇火腿肠", "unit": "件", "quantity": 10, "unit_price": 28, "amount": 280, "notes": "10瓶"},
+    {"product_name": "洽洽瓜蒌", "unit": "件", "quantity": 8, "unit_price": 20, "amount": 160, "notes": "已关 (cancelled)"},
+    {"product_name": "奥利奥饼干", "unit": "件", "quantity": 6, "unit_price": 16, "amount": 96, "notes": "6瓶"},
+    {"product_name": "乐事薯片", "unit": "件", "quantity": 6, "unit_price": 18, "amount": 108, "notes": ""},
+    {"product_name": "卫龙辣条", "unit": "件", "quantity": 6, "unit_price": 15, "amount": 90, "notes": "60"}
+  ],
+  "cancelled_lines": [
+    {"index": 7, "product_name": "洽洽瓜蒌", "note": "marked (已关) on the slip"}
+  ]
+}

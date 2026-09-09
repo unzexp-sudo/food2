@@ -88,7 +88,7 @@ export default function WholesalerDetailDrawer({ open, onClose, wholesaler }: Pr
               <StatusTag domain="master" value={detail.is_active ? "active" : "inactive"} />
             </Descriptions.Item>
             {detail.created_at && (
-              <Descriptions.Item label="Created">
+              <Descriptions.Item label={t("common.createdAt")}>
                 {new Date(detail.created_at).toLocaleString()}
               </Descriptions.Item>
             )}
@@ -96,10 +96,10 @@ export default function WholesalerDetailDrawer({ open, onClose, wholesaler }: Pr
         )}
 
         <Typography.Title level={5} style={{ marginTop: 24 }}>
-          Products supplied
+          {t("pages.master.wholesalers.productsSupplied")}
         </Typography.Title>
         {products.length === 0 ? (
-          <Typography.Text type="secondary">No products linked.</Typography.Text>
+          <Typography.Text type="secondary">{t("pages.master.wholesalers.noProductsLinked")}</Typography.Text>
         ) : (
           <List
             size="small"
@@ -115,7 +115,7 @@ export default function WholesalerDetailDrawer({ open, onClose, wholesaler }: Pr
                   </Typography.Text>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     {p.supplier_sku ? `SKU: ${p.supplier_sku} · ` : ""}
-                    Cost: {p.cost_price.toFixed(2)}
+                    {t("pages.master.wholesalers.cost")}: {p.cost_price.toFixed(2)}
                   </Typography.Text>
                 </Space>
               </List.Item>

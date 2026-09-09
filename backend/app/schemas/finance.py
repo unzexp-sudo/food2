@@ -67,6 +67,20 @@ class PaymentOut(BaseModel):
 
 
 # --- Statements --------------------------------------------------------------
+class StatementGenerateIn(BaseModel):
+    """Generate an AR (customer) or AP (wholesaler) statement for a date range.
+
+    The statement is computed on demand from deliveries/inbound receipts — there
+    is no persisted Statement resource, so "generate" returns the same computed
+    payload the GET endpoints produce.
+    """
+
+    party_type: Literal["customer", "wholesaler"]
+    party_id: str
+    from_date: date | None = None
+    to_date: date | None = None
+
+
 class ARStatementRow(BaseModel):
     order_id: str
     order_number: str | None = None

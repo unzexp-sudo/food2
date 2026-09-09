@@ -1,33 +1,38 @@
 import type { ReactNode } from "react";
+import { lazy } from "react";
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import AdminLayout from "./layouts/AdminLayout";
 import LoginPage from "./pages/auth/LoginPage";
-import IntakePage from "./pages/intake/IntakePage";
-import OrdersPage from "./pages/orders/OrdersPage";
-import OrderDetailPage from "./pages/orders/OrderDetailPage";
-import ConsolidationPage from "./pages/consolidation/ConsolidationPage";
-import PurchaseOrdersPage from "./pages/purchase-orders/PurchaseOrdersPage";
-import PurchaseOrderDetailPage from "./pages/purchase-orders/PurchaseOrderDetailPage";
-import InboundPage from "./pages/warehouse/InboundPage";
-import PickListsPage from "./pages/warehouse/PickListsPage";
-import InventoryPage from "./pages/warehouse/InventoryPage";
-import DeliveryPage from "./pages/delivery/DeliveryPage";
-import InvoicesPage from "./pages/finance/InvoicesPage";
-import StatementsPage from "./pages/finance/StatementsPage";
-import MarginPage from "./pages/finance/MarginPage";
-import CustomersPage from "./pages/master/CustomersPage";
-import ProductsPage from "./pages/master/ProductsPage";
-import WholesalersPage from "./pages/master/WholesalersPage";
-import ContractsPage from "./pages/master/ContractsPage";
-import StandingOrdersPage from "./pages/master/StandingOrdersPage";
-import QuotationsPage from "./pages/sales/QuotationsPage";
-import UsersPage from "./pages/system/UsersPage";
-import AuditPage from "./pages/system/AuditPage";
-import SettingsPage from "./pages/system/SettingsPage";
-import DashboardPage from "./pages/dashboard/DashboardPage";
-import WeComMessagesPage from "./pages/wecom/WeComMessagesPage";
-import WeComContactsPage from "./pages/wecom/WeComContactsPage";
-import WeComOutboundPage from "./pages/wecom/WeComOutboundPage";
+
+// Login is eager so the auth screen paints immediately (no token yet).
+// Every other route is split into its own chunk via React.lazy so the initial
+// bundle stays small and each module loads on demand.
+const IntakePage = lazy(() => import("./pages/intake/IntakePage"));
+const OrdersPage = lazy(() => import("./pages/orders/OrdersPage"));
+const OrderDetailPage = lazy(() => import("./pages/orders/OrderDetailPage"));
+const ConsolidationPage = lazy(() => import("./pages/consolidation/ConsolidationPage"));
+const PurchaseOrdersPage = lazy(() => import("./pages/purchase-orders/PurchaseOrdersPage"));
+const PurchaseOrderDetailPage = lazy(() => import("./pages/purchase-orders/PurchaseOrderDetailPage"));
+const InboundPage = lazy(() => import("./pages/warehouse/InboundPage"));
+const PickListsPage = lazy(() => import("./pages/warehouse/PickListsPage"));
+const InventoryPage = lazy(() => import("./pages/warehouse/InventoryPage"));
+const DeliveryPage = lazy(() => import("./pages/delivery/DeliveryPage"));
+const InvoicesPage = lazy(() => import("./pages/finance/InvoicesPage"));
+const StatementsPage = lazy(() => import("./pages/finance/StatementsPage"));
+const MarginPage = lazy(() => import("./pages/finance/MarginPage"));
+const CustomersPage = lazy(() => import("./pages/master/CustomersPage"));
+const ProductsPage = lazy(() => import("./pages/master/ProductsPage"));
+const WholesalersPage = lazy(() => import("./pages/master/WholesalersPage"));
+const ContractsPage = lazy(() => import("./pages/master/ContractsPage"));
+const StandingOrdersPage = lazy(() => import("./pages/master/StandingOrdersPage"));
+const QuotationsPage = lazy(() => import("./pages/sales/QuotationsPage"));
+const UsersPage = lazy(() => import("./pages/system/UsersPage"));
+const AuditPage = lazy(() => import("./pages/system/AuditPage"));
+const SettingsPage = lazy(() => import("./pages/system/SettingsPage"));
+const DashboardPage = lazy(() => import("./pages/dashboard/DashboardPage"));
+const WeComMessagesPage = lazy(() => import("./pages/wecom/WeComMessagesPage"));
+const WeComContactsPage = lazy(() => import("./pages/wecom/WeComContactsPage"));
+const WeComOutboundPage = lazy(() => import("./pages/wecom/WeComOutboundPage"));
 
 /** Redirects unauthenticated visitors to /login. Wrap around the admin layout. */
 export function AuthGuard({ children }: { children: ReactNode }) {

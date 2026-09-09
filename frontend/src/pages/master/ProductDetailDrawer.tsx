@@ -94,7 +94,7 @@ export default function ProductDetailDrawer({
           </Descriptions.Item>
         </Descriptions>
       ) : (
-        <span>{"Product not found"}</span>
+        <span>{t("pages.master.products.notFound")}</span>
       )}
     </Drawer>
   );

@@ -1,0 +1,25 @@
+{
+  "id": "002_songdan_609621",
+  "source_file": "002_songdan_609621.jpeg",
+  "form_type": "printed_product_handwritten_values",
+  "customer": "羌剡超市",
+  "date": "2024-06-18",
+  "doc_number": "609621",
+  "expected_total": 1866,
+  "expected_requires_human_review": true,
+  "notes": "Clean pink slip, 11 lines. Product names printed; quantities/prices/amounts handwritten. Box annotations (箱/盒/包) appear inside the quantity column — these encode a box→piece multiplier the OCR cannot infer, so every such line must be verified.",
+  "lines": [
+    {"product_name": "康师傅冰红茶 550ml", "unit": "件", "quantity": 6, "unit_price": 28, "amount": 280, "notes": "6箱"},
+    {"product_name": "统一绿茶 500ml", "unit": "件", "quantity": 8, "unit_price": 24, "amount": 192, "notes": ""},
+    {"product_name": "可口可乐 330ml", "unit": "件", "quantity": 5, "unit_price": 32, "amount": 160, "notes": "32箱"},
+    {"product_name": "旺仔牛奶 125ml", "unit": "盒", "quantity": 10, "unit_price": 36, "amount": 360, "notes": "36箱"},
+    {"product_name": "达利园面包 香软", "unit": "件", "quantity": 6, "unit_price": 25, "amount": 150, "notes": "6箱"},
+    {"product_name": "银祥记沙琪玛", "unit": "件", "quantity": 5, "unit_price": 18, "amount": 90, "notes": ""},
+    {"product_name": "双汇火腿肠", "unit": "件", "quantity": 10, "unit_price": 28, "amount": 280, "notes": "10箱"},
+    {"product_name": "洽洽瓜蒌", "unit": "件", "quantity": 8, "unit_price": 20, "amount": 160, "notes": "20箱"},
+    {"product_name": "奥利奥饼干", "unit": "件", "quantity": 6, "unit_price": 16, "amount": 96, "notes": "6箱"},
+    {"product_name": "乐事薯片", "unit": "件", "quantity": 6, "unit_price": 18, "amount": 108, "notes": ""},
+    {"product_name": "卫龙辣条", "unit": "件", "quantity": 6, "unit_price": 15, "amount": 90, "notes": "60包"}
+  ],
+  "cancelled_lines": []
+}

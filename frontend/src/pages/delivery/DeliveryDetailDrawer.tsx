@@ -56,13 +56,13 @@ export default function DeliveryDetailDrawer({
       {delivery ? (
         <>
           <Descriptions size="small" column={2} bordered>
-            <Descriptions.Item label="Route / Zone">
+            <Descriptions.Item label={t("pages.delivery.delivery.routeZone")}>
               {delivery.route ?? "—"}
             </Descriptions.Item>
-            <Descriptions.Item label="Assigned Driver">
+            <Descriptions.Item label={t("pages.delivery.delivery.driver")}>
               {delivery.driver_name ?? "—"}
             </Descriptions.Item>
-            <Descriptions.Item label="Status">
+            <Descriptions.Item label={t("common.status")}>
               <StatusTag domain="delivery" value={delivery.status} />
             </Descriptions.Item>
             <Descriptions.Item label="ETA">

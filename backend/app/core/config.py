@@ -33,11 +33,43 @@ class Settings(BaseSettings):
     # File storage
     files_dir: str = str(BACKEND_DIR / "data" / "files")
 
-    # AI intake: "mock" (deterministic, offline) or "openai"
+    # AI intake: "mock" (deterministic, offline) or "openai" or "aliyun_qwen"
     ai_provider: str = "mock"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"
+
+    # --- Aliyun OCR (handwritten Chinese text + table recognition) -------------
+    # Used by the AliyunHandwritingExtractor. Recognizes full-page handwriting
+    # with per-word confidence + cell coordinates. Get keys from the Aliyun
+    # console (OCR API product). https://ocr.console.aliyun.com/
+    aliyun_access_key_id: str = ""
+    aliyun_access_key_secret: str = ""
+    aliyun_region_id: str = "cn-hangzhou"
+    aliyun_ocr_endpoint: str = "ocr-api.cn-hangzhou.aliyuncs.com"
+
+    # --- Qwen-VL (Alibaba multimodal) — form-type classifier + structurer -----
+    # Used by QwenVLFormTypeClassifier + AliyunQwenExtractor. OpenAI-compatible
+    # endpoint (DashScope). https://dashscope.console.aliyun.com/
+    qwen_api_key: str = ""
+    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_model: str = "qwen-vl-max"
+    # Cheaper/faster model used only for the cheap form-type classifier call.
+    qwen_form_type_model: str = "qwen-vl-plus"
+
+    # --- OCR quality-assurance gates ------------------------------------------
+    # A per-field confidence below this is treated as a hard flag (the field is
+    # surfaced for human correction). The whole document is routed to human
+    # review when ANY field is below this, or when the overall (quantity-
+    # weighted) confidence is below `ocr_review_threshold`.
+    ocr_field_confidence_floor: float = 0.80
+    # Below this overall confidence the document is ALWAYS flagged for review,
+    # even if no individual field tripped the floor. Tuned against the eval set
+    # in tests/fixtures/handwritten (see tests/test_handwritten_eval.py).
+    ocr_review_threshold: float = 0.95
+    # Tolerance (absolute, in currency units) for line-amount and order-total
+    # math checks. Handwritten decimals are noisy, so leave some slack.
+    ocr_math_abs_tol: float = 1.0
 
     # CORS
     cors_origins: str = "http://localhost:5173"

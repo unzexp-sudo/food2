@@ -9,6 +9,8 @@ Endpoints (see docs/AGENT_CONTRACTS.md §5):
   GET  /jobs                 paged; filters: status                             R: ops/admin
   GET  /jobs/{id}            → IntakeJob
   POST /jobs/{id}/retry      → re-queue processing                            R: ops/admin
+  POST /jobs/{id}/confirm-review → human confirms a needs_review job, creates  R: ops/admin
+                                  the draft Order (never auto-run by pipeline)
   GET  /extractions/{job_id} → raw AI output (immutable audit trail)
 """
 from __future__ import annotations
@@ -34,6 +36,7 @@ from app.core.database import get_db
 from app.core.deps import require_roles
 from app.core.pagination import clamp_page, page_response
 from app.models import User
+from app.ai.pipeline import confirm_intake_review
 from app.services.intake.service import (
     _doc_out,
     _extraction_out,
@@ -220,6 +223,31 @@ def retry_job_endpoint(
     job = retry_job(db, job, actor=actor, background_tasks=background_tasks)
     db.commit()
     return {"job_id": job.id, "status": job.status, "retry_count": job.retry_count}
+
+
+@router.post("/jobs/{job_id}/confirm-review", response_model=None)
+def confirm_review_endpoint(
+    job_id: str,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles("ops", "admin")),
+):
+    """Human confirms a `needs_review` extraction → creates the draft order.
+
+    The pipeline never calls this automatically. This is the explicit human
+    "Confirm & submit" action for handwritten / low-confidence notes. Cancelled
+    lines are excluded from the resulting order (the human already confirmed
+    their removal during review), so a voided line never resurrects itself.
+    """
+    try:
+        order = confirm_intake_review(db, job_id, actor=actor)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    return {
+        "job_id": job_id,
+        "order_id": order.id,
+        "order_number": order.order_number,
+        "status": order.status,
+    }
 
 
 # --- Extractions (immutable audit trail) -------------------------------------

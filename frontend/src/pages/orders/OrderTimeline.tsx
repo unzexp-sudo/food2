@@ -20,12 +20,12 @@ interface OrderTimelineData {
  * pending_confirmation step.
  */
 const STAGES: { key: string; label: string }[] = [
-  { key: "draft", label: "Order created" },
-  { key: "pending_confirmation", label: "Pending confirmation" },
-  { key: "confirmed", label: "Confirmed" },
-  { key: "consolidated", label: "Consolidated" },
-  { key: "fulfilled", label: "Fulfilled" },
-  { key: "invoiced", label: "Invoiced" },
+  { key: "draft", label: "pages.orders.orderTimeline.draft" },
+  { key: "pending_confirmation", label: "pages.orders.orderTimeline.pendingConfirmation" },
+  { key: "confirmed", label: "pages.orders.orderTimeline.confirmed" },
+  { key: "consolidated", label: "pages.orders.orderTimeline.consolidated" },
+  { key: "fulfilled", label: "pages.orders.orderTimeline.fulfilled" },
+  { key: "invoiced", label: "pages.orders.orderTimeline.invoiced" },
 ];
 
 const STATUS_INDEX: Record<string, number> = {
@@ -39,7 +39,7 @@ const STATUS_INDEX: Record<string, number> = {
 };
 
 export default function OrderTimeline({ order }: { order: OrderTimelineData }) {
-  const { lang } = useLanguage();
+  const { t } = useLanguage();
   const current = STATUS_INDEX[order.status] ?? 0;
   const isHold = order.status === "needs_clarification";
 
@@ -60,7 +60,7 @@ export default function OrderTimeline({ order }: { order: OrderTimelineData }) {
       children: (
         <Space direction="vertical" size={2}>
           <Space size={8} wrap>
-            <Typography.Text strong={active}>{stage.label}</Typography.Text>
+            <Typography.Text strong={active}>{t(stage.label)}</Typography.Text>
             {active && <StatusTag domain="order" value={order.status} />}
           </Space>
           {ts && (
@@ -70,7 +70,7 @@ export default function OrderTimeline({ order }: { order: OrderTimelineData }) {
           )}
           {active && isHold && (
             <Typography.Text type="warning" style={{ fontSize: 12 }}>
-              {lang === "zh" ? "需要澄清" : "Needs clarification"}
+              {t("pages.orders.orderTimeline.needsClarification")}
             </Typography.Text>
           )}
         </Space>

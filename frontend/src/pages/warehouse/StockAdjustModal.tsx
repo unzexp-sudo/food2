@@ -13,11 +13,6 @@ interface StockAdjustModalProps {
   onSuccess: () => void;
 }
 
-const REASONS = [
-  { value: "damage", label: "Damage" },
-  { value: "count", label: "Count" },
-  { value: "transfer", label: "Transfer" },
-];
 
 export default function StockAdjustModal({
   open,
@@ -28,6 +23,12 @@ export default function StockAdjustModal({
   const { t, lang } = useLanguage();
   const [form] = Form.useForm();
   const { loading, run } = useMutate();
+
+  const REASONS = [
+    { value: "damage", label: t("pages.warehouse.inventory.stockAdjust.damage") },
+    { value: "count", label: t("pages.warehouse.inventory.stockAdjust.count") },
+    { value: "transfer", label: t("pages.warehouse.inventory.stockAdjust.transfer") },
+  ];
 
   useEffect(() => {
     if (open) form.resetFields();
@@ -41,16 +42,14 @@ export default function StockAdjustModal({
     } catch {
       return;
     }
-    // GAP: No dedicated adjust endpoint exists in the backend
-    // (only GET /inventory and POST /inventory/loss). We PATCH the inventory
-    // line as a fallback; this will 404 until a backend adjust endpoint is added.
     const ok = await run(
       () =>
-        api.patch<InventoryMovement>(`/inventory/${item.id}`, {
+        api.post<InventoryMovement>("/inventory/adjust", {
+          product_id: item.product_id,
           quantity_delta: values.delta,
           reason: values.reason,
         }),
-      { success: "Stock adjusted" },
+      { success: t("pages.warehouse.inventory.stockAdjust.success") },
     );
     if (ok) {
       onSuccess();
@@ -61,7 +60,7 @@ export default function StockAdjustModal({
   return (
     <Modal
       open={open}
-      title={`Adjust · ${
+      title={`${t("common.adjust")} · ${
         item ? pickName(lang, item.product_name_en, item.product_name_zh) : ""
       }`}
       onCancel={onClose}
@@ -78,15 +77,15 @@ export default function StockAdjustModal({
       <Form form={form} layout="vertical">
         <Form.Item
           name="reason"
-          label="Reason"
-          rules={[{ required: true, message: "Reason is required" }]}
+          label={t("pages.warehouse.inventory.stockAdjust.reason")}
+          rules={[{ required: true, message: t("pages.warehouse.inventory.stockAdjust.reasonRequired") }]}
         >
-          <Select placeholder="Select reason" options={REASONS} />
+          <Select placeholder={t("pages.warehouse.inventory.stockAdjust.selectReason")} options={REASONS} />
         </Form.Item>
         <Form.Item
           name="delta"
-          label="Quantity"
-          rules={[{ required: true, message: "Quantity is required" }]}
+          label={t("pages.warehouse.inventory.stockAdjust.quantity")}
+          rules={[{ required: true, message: t("pages.warehouse.inventory.stockAdjust.quantityRequired") }]}
         >
           <InputNumber step={1} style={{ width: "100%" }} />
         </Form.Item>

@@ -120,7 +120,7 @@ export default function CustomerDetailDrawer({ open, customer, onClose }: Props)
           </Descriptions>
 
           <Typography.Title level={5} style={{ marginTop: 24 }}>
-            Order history
+            {t("pages.master.customers.orderHistory")}
           </Typography.Title>
           <Table<OrderRow>
             rowKey="id"

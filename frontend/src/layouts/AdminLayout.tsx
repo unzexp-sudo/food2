@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Layout, Menu, Segmented, Tag, Typography, Button, Switch } from "antd";
+import { Layout, Menu, Segmented, Tag, Typography, Button, Switch, Spin } from "antd";
 import {
   InboxOutlined,
   FileTextOutlined,
@@ -131,6 +131,22 @@ const ROLE_TAG_COLORS: Record<Role, string> = {
   driver: "orange",
 };
 
+/** Centered spinner shown while a lazily-loaded route chunk is fetched. */
+function RouteFallback() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        minHeight: 240,
+      }}
+    >
+      <Spin size="large" />
+    </div>
+  );
+}
+
 export default function AdminLayout() {
   const { t, lang, setLang } = useLanguage();
   const { mode, setMode } = useThemeMode();
@@ -222,7 +238,9 @@ export default function AdminLayout() {
           />
         </Sider>
         <Content style={{ padding: 16, overflow: "auto" }}>
-          <Outlet />
+          <Suspense fallback={<RouteFallback />}>
+            <Outlet />
+          </Suspense>
         </Content>
       </Layout>
     </Layout>

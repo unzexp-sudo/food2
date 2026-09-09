@@ -120,6 +120,12 @@ class InventoryLossIn(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class InventoryAdjustIn(BaseModel):
+    product_id: str
+    quantity_delta: float  # signed: + in / - out
+    reason: str = Field(min_length=1)
+
+
 class InventoryMovementOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

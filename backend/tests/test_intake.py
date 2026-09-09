@@ -423,3 +423,117 @@ def test_multipart_form_submit(client, admin_headers):
     job_id = r.json()["job_id"]
     job = _wait_for_job(client, job_id, admin_headers)
     assert job["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# 10. "0 assumptions" gate: a flagged handwritten note must NOT auto-create an
+#     order; a human confirms it via confirm-review, which then creates it
+#     (excluding any cancelled lines).
+# ---------------------------------------------------------------------------
+
+class _FlaggedHandwrittenExtractor:
+    """Stand-in for the real aliyun_qwen extractor on a low-confidence note."""
+
+    def extract(self, *, source_type, raw_text=None, file_path=None, original_filename=None):
+        from app.ai.adapters import ExtractionResult, RawLine
+
+        lines = [
+            RawLine(product_name="土豆", quantity=50, unit="斤", cancelled=False),
+            RawLine(product_name="大白菜", quantity=30, unit="斤", cancelled=False),
+            # Customer cancelled this line (e.g. struck through / 已关).
+            RawLine(product_name="五花肉", quantity=20, unit="斤", cancelled=True, notes="已关"),
+        ]
+        return ExtractionResult(
+            lines=lines,
+            doc_type="handwritten_note",
+            form_type="mixed",
+            form_type_confidence=0.9,
+            overall_confidence=0.6,
+            requires_human_review=True,
+            cancelled_lines=[{"index": 2, "product_name": "五花肉"}],
+            parser_notes="simulated flagged handwritten note",
+        )
+
+
+def test_flagged_handwritten_blocks_order_then_confirm_creates_it(
+    client, admin_headers, pin_cutoff, monkeypatch
+):
+    # Force the pipeline to use our flagged extractor.
+    monkeypatch.setattr("app.ai.pipeline.get_extractor", lambda: _FlaggedHandwrittenExtractor())
+    # Pin auto-confirm OFF so the new draft order stays in "draft" instead of
+    # being transitioned to "pending_confirmation" by the real-clock cutoff
+    # logic (the WeCom notify path then tries to call out to a gateway that
+    # isn't running in tests).
+    pin_cutoff(False)
+    customer_id = _get_customer_id(client, admin_headers, "C001")
+
+    r = client.post(
+        "/api/v1/intake/submit",
+        json={
+            "customer_id": customer_id,
+            "source_type": "image",
+            "raw_text": "handwritten note",
+        },
+        headers=admin_headers,
+    )
+    assert r.status_code == 201, f"{r.status_code} {r.text}"
+    job_id = r.json()["job_id"]
+
+    job = _wait_for_job(client, job_id, admin_headers)
+    # The hard rule: NO order is created automatically for a flagged note.
+    assert job["status"] == "needs_review", f"expected needs_review, got {job['status']}: {job.get('error')}"
+    assert job["draft_order_id"] is None, "flagged note must not auto-create an order"
+
+    # The extraction payload carries the QA fields for the review screen.
+    r2 = client.get(f"/api/v1/intake/extractions/{job_id}", headers=admin_headers)
+    assert r2.status_code == 200
+    raw = r2.json()["raw_output"]
+    assert raw.get("requires_human_review") is True
+    assert raw.get("form_type") == "mixed"
+    assert raw.get("is_handwritten") is True
+    assert raw.get("cancelled_lines") == [{"index": 2, "product_name": "五花肉"}]
+    # Per-line cancellation flag is present so the UI can highlight it.
+    cancelled = [ln for ln in raw["lines"] if ln.get("cancelled")]
+    assert len(cancelled) == 1
+    assert "五花肉" in (cancelled[0].get("matched_product_name") or "") or "五花肉" in (
+        cancelled[0].get("raw_text") or ""
+    )
+
+    # Confirm-review creates the order (excluding the cancelled line).
+    r3 = client.post(
+        f"/api/v1/intake/jobs/{job_id}/confirm-review", headers=admin_headers
+    )
+    assert r3.status_code == 200, f"{r3.status_code} {r3.text}"
+    body = r3.json()
+    assert body["order_id"]
+    assert body["status"] == "draft"
+
+    # After confirm, the job is completed and the order exists.
+    job2 = client.get(f"/api/v1/intake/jobs/{job_id}", headers=admin_headers).json()
+    assert job2["status"] == "completed"
+    assert job2["draft_order_id"] == body["order_id"]
+
+    order = _get_draft_order(client, job2, admin_headers)
+    # Cancelled line excluded: 3 parsed, 2 ordered.
+    assert len(order["lines"]) == 2, f"cancelled line should be excluded: {order['lines']}"
+    product_names = " ".join(ln["raw_text"] for ln in order["lines"])
+    assert "五花肉" not in product_names, "cancelled line must not appear in the order"
+
+
+def test_confirm_review_rejects_non_review_job(client, admin_headers, monkeypatch):
+    """confirm-review must refuse a job that isn't awaiting review."""
+    customer_id = _get_customer_id(client, admin_headers, "C001")
+    r = client.post(
+        "/api/v1/intake/submit",
+        json={"customer_id": customer_id, "source_type": "text", "raw_text": DEMO_TEXT},
+        headers=admin_headers,
+    )
+    assert r.status_code == 201
+    job_id = r.json()["job_id"]
+    job = _wait_for_job(client, job_id, admin_headers)
+    assert job["status"] == "completed"  # clean text note auto-completes
+
+    r2 = client.post(
+        f"/api/v1/intake/jobs/{job_id}/confirm-review", headers=admin_headers
+    )
+    assert r2.status_code == 400, "confirm-review must reject a non-review job"

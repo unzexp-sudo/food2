@@ -66,3 +66,29 @@ def record_loss(
         summary=f"Inventory loss: {quantity} of product {product_id} ({reason})",
     )
     return mv
+
+
+def record_adjustment(
+    db: Session,
+    *,
+    product_id: str,
+    quantity_delta: float,
+    reason: str,
+    actor: User | None = None,
+) -> InventoryMovement:
+    mv = InventoryMovement(
+        product_id=product_id,
+        quantity_delta=float(quantity_delta),
+        ref_type="adjust",
+        ref_id=None,
+        note=reason,
+    )
+    db.add(mv)
+    db.flush()
+    log_audit(
+        db, actor, "InventoryMovement", mv.id, "adjust",
+        before=None,
+        after={"product_id": product_id, "quantity_delta": float(quantity_delta), "reason": reason},
+        summary=f"Inventory adjustment: {quantity_delta} of product {product_id} ({reason})",
+    )
+    return mv

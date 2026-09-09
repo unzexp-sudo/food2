@@ -5,6 +5,7 @@ Run:  cd backend && python -m uvicorn app.main:app --reload --port 8000
 """
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -33,13 +34,45 @@ from app.api.v1 import (
 from app.core.config import settings
 from app.core.database import SessionLocal, init_db
 
+_log = logging.getLogger("erp.main")
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    init_db()
-    with SessionLocal() as db:
-        run_seed(db)
+    # Boot the schema + demo seed, but NEVER let a startup error take the
+    # whole container down. If the DB is briefly unreachable (e.g. a Railway
+    # Postgres plugin still spinning up, or a wrong ERP_DATABASE_URL), the
+    # process must still bind to PORT so /api/health answers 200 — otherwise
+    # Railway shows "Application failed to respond" and you can't even see
+    # the real error in the deploy logs. The exception is logged at ERROR;
+    # endpoints that need the DB will return 500 until the next restart /
+    # once the DB is reachable.
+    _log.info("startup: init_db (database_url=%s)", _safe_db_url(settings.database_url))
+    try:
+        init_db()
+    except Exception:  # noqa: BLE001
+        _log.exception("startup: init_db FAILED — app will start but DB-backed endpoints will 500")
+    else:
+        try:
+            with SessionLocal() as db:
+                run_seed(db)
+        except Exception:  # noqa: BLE001
+            _log.exception("startup: seed FAILED — continuing without demo data")
     yield
+
+
+def _safe_db_url(url: str) -> str:
+    """Mask the password in a database URL for safe logging."""
+    if "@" not in url or "://" not in url:
+        return url
+    scheme, rest = url.split("://", 1)
+    if "@" not in rest:
+        return url
+    creds, host = rest.split("@", 1)
+    if ":" in creds:
+        user, _ = creds.split(":", 1)
+        return f"{scheme}://{user}:***@{host}"
+    return url
 
 
 app = FastAPI(

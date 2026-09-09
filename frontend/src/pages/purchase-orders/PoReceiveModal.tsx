@@ -85,7 +85,7 @@ export default function PoReceiveModal({
     void run(
       () => api.post("/inbound-receipts", { po_id: poId, lines }),
       {
-        success: pickName(lang, "Receipt recorded", "已记录收货"),
+        success: t("pages.purchaseOrders.poReceive.receiptRecorded"),
         onSuccess: () => {
           onSuccess?.();
           onClose();
@@ -114,7 +114,7 @@ export default function PoReceiveModal({
         `${r.quantity_received} ${r.unit_code ?? ""}`.trim(),
     },
     {
-      title: pickName(lang, "Receive now", "本次收货"),
+      title: t("pages.purchaseOrders.poReceive.receiveNow"),
       key: "receive",
       render: (_: unknown, r: PoLine) => {
         const remaining = Math.max(0, r.quantity_ordered - r.quantity_received);
@@ -139,7 +139,7 @@ export default function PoReceiveModal({
   return (
     <Modal
       open={open}
-      title={pickName(lang, "Record goods receipt", "记录收货")}
+      title={t("pages.purchaseOrders.poReceive.recordGoodsReceipt")}
       onCancel={onClose}
       onOk={handleOk}
       okText={t("common.submit")}
@@ -150,17 +150,13 @@ export default function PoReceiveModal({
     >
       <Typography.Paragraph type="secondary">
         {detail
-          ? pickName(lang, `PO ${detail.po_number}`, `采购单 ${detail.po_number}`)
+          ? t("pages.purchaseOrders.poReceive.poNumber", { po_number: detail.po_number })
           : ""}
       </Typography.Paragraph>
       {detail && detail.lines.length === 0 ? (
         <Alert
           type="info"
-          message={pickName(
-            lang,
-            "This purchase order has no lines.",
-            "该采购单没有明细行。",
-          )}
+          message={t("pages.purchaseOrders.poReceive.noLines")}
         />
       ) : (
         <Table<PoLine>

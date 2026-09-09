@@ -28,6 +28,7 @@ from app.core.pagination import clamp_page, page_response
 from app.models import PurchaseOrder, User
 from app.schemas.warehouse import (
     InboundReceiptCreate,
+    InventoryAdjustIn,
     InventoryLossIn,
     PickLinePickIn,
     PickListGenerateIn,
@@ -203,6 +204,23 @@ def record_loss_endpoint(
         db,
         product_id=payload.product_id,
         quantity=payload.quantity,
+        reason=payload.reason,
+        actor=actor,
+    )
+    db.commit()
+    return inv_svc._movement_out(db, mv)
+
+
+@inv_router.post("/adjust", response_model=None, status_code=status.HTTP_201_CREATED)
+def record_adjustment_endpoint(
+    payload: InventoryAdjustIn,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles("warehouse")),
+):
+    mv = inv_svc.record_adjustment(
+        db,
+        product_id=payload.product_id,
+        quantity_delta=payload.quantity_delta,
         reason=payload.reason,
         actor=actor,
     )

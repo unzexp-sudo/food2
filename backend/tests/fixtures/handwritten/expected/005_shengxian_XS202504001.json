@@ -1,0 +1,32 @@
+{
+  "id": "005_shengxian_XS202504001",
+  "source_file": "005_shengxian_XS202504001.jpeg",
+  "form_type": "printed_form_numbers",
+  "customer": "XXX食堂",
+  "date": "2025-04-14",
+  "doc_number": "XS-202504001",
+  "expected_total": 1329.76,
+  "expected_requires_human_review": true,
+  "notes": "Fully printed form (生鲜配送有限公司): 18 product names pre-printed, only weights/quantities/prices handwritten. Easiest category — OCR reads numbers only and matches products by row position. Total 壹仟叁佰贰拾玖元柒角陆分 = ¥1,329.76 (reconciles exactly). Ideal template; encourage suppliers to use this format.",
+  "lines": [
+    {"product_name": "白菜心", "unit": "斤", "quantity": 12, "unit_price": 5.60, "amount": 66.00},
+    {"product_name": "香茄", "unit": "斤", "quantity": 3, "unit_price": 3.50, "amount": 10.50},
+    {"product_name": "豆角", "unit": "斤", "quantity": 11, "unit_price": 4.30, "amount": 47.30},
+    {"product_name": "豆腐干", "unit": "斤", "quantity": 3.3, "unit_price": 7.00, "amount": 23.10},
+    {"product_name": "豆笋", "unit": "斤", "quantity": 9.8, "unit_price": 15.00, "amount": 147.00},
+    {"product_name": "芥菜", "unit": "斤", "quantity": 2.3, "unit_price": 5.00, "amount": 11.50},
+    {"product_name": "黄菌椒", "unit": "斤", "quantity": 3.6, "unit_price": 9.80, "amount": 35.28},
+    {"product_name": "鸡蛋", "unit": "个", "quantity": 20, "unit_price": 5.80, "amount": 116.00},
+    {"product_name": "红萝卜", "unit": "斤", "quantity": 5.8, "unit_price": 2.50, "amount": 14.50},
+    {"product_name": "芹菜", "unit": "斤", "quantity": 3.6, "unit_price": 12.00, "amount": 43.20},
+    {"product_name": "皮蛋", "unit": "个", "quantity": 3.6, "unit_price": 1.30, "amount": 4.68},
+    {"product_name": "烧鸭", "unit": "斤", "quantity": 30, "unit_price": 15.50, "amount": 465.00},
+    {"product_name": "青尖椒", "unit": "斤", "quantity": 3, "unit_price": 6.50, "amount": 19.50},
+    {"product_name": "青菌椒", "unit": "斤", "quantity": 5, "unit_price": 5.30, "amount": 26.50},
+    {"product_name": "头菜丝", "unit": "斤", "quantity": 2, "unit_price": 4.00, "amount": 8.00},
+    {"product_name": "土豆", "unit": "斤", "quantity": 15, "unit_price": 2.50, "amount": 37.50},
+    {"product_name": "土茯苓", "unit": "斤", "quantity": 0.8, "unit_price": 14.00, "amount": 11.20},
+    {"product_name": "鸭血肠", "unit": "斤", "quantity": 9, "unit_price": 27.00, "amount": 243.00}
+  ],
+  "cancelled_lines": []
+}

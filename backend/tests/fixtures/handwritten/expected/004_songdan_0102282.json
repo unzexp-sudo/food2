@@ -1,0 +1,21 @@
+{
+  "id": "004_songdan_0102282",
+  "source_file": "004_songdan_0102282.jpeg",
+  "form_type": "fully_handwritten",
+  "customer": "鲜活",
+  "date": "2025-07-05",
+  "doc_number": "0102282",
+  "expected_total": 186,
+  "expected_requires_human_review": true,
+  "notes": "Fully handwritten pink slip. Empty cells, crossed-out values, and misaligned rows (some rows shift one column to the right). The hardest category. At least 3 lines are low-confidence; the stated total (186张) does not reconcile with the legible line amounts, so it MUST be reviewed. Box/packaging units mixed in.",
+  "lines": [
+    {"product_name": "苦菜", "unit": null, "quantity": 3, "unit_price": 27, "amount": 107, "notes": "low confidence; crossed-out value"},
+    {"product_name": "白菜", "unit": null, "quantity": 4, "unit_price": 16, "amount": null, "notes": "amount blank"},
+    {"product_name": "空心菜", "unit": null, "quantity": 6, "unit_price": 18, "amount": null, "notes": "right margin shows 100 (uncertain)"},
+    {"product_name": "茄子", "unit": null, "quantity": 7, "unit_price": 43, "amount": null, "notes": "low confidence"},
+    {"product_name": "豆角", "unit": null, "quantity": 31, "unit_price": null, "amount": null, "notes": "low confidence"},
+    {"product_name": "海丝瓜", "unit": null, "quantity": 14, "unit_price": 26, "amount": 30, "notes": "amount uncertain"},
+    {"product_name": "烧肉", "unit": null, "quantity": 38, "unit_price": 17, "amount": null, "notes": "low confidence"}
+  ],
+  "cancelled_lines": []
+}

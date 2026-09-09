@@ -1,0 +1,25 @@
+{
+  "id": "001_two_slips",
+  "source_file": "001_two_slips.jpeg",
+  "form_type": "mixed",
+  "customer": "unknown",
+  "date": null,
+  "doc_number": null,
+  "expected_total": 1872,
+  "expected_requires_human_review": true,
+  "notes": "Two notes in one photo. Left slip is partial/cut off (only a few legible lines: 干类/肉, 肉米, amounts 282/231). Right slip is 罗氏蔬菜配送 No 0005026, dated 2022-01-05, customer 罗盛, total 1872. Right slip is semi-printed (line numbers + column headers printed; values handwritten). Hard case: several product names illegible, units ambiguous.",
+  "lines": [
+    {"product_name": "椰", "unit": "斤", "quantity": 6, "unit_price": null, "amount": null, "notes": "uncertain"},
+    {"product_name": "白花菜", "unit": "斤", "quantity": 6.5, "unit_price": null, "amount": null, "notes": "uncertain"},
+    {"product_name": "青菜", "unit": "斤", "quantity": 5, "unit_price": null, "amount": null, "notes": ""},
+    {"product_name": "大白菜", "unit": "斤", "quantity": 5, "unit_price": null, "amount": null, "notes": ""},
+    {"product_name": "莴苣", "unit": "斤", "quantity": 8, "unit_price": null, "amount": null, "notes": ""},
+    {"product_name": "豇豆", "unit": "斤", "quantity": 5, "unit_price": null, "amount": null, "notes": ""},
+    {"product_name": "土豆", "unit": "斤", "quantity": 6, "unit_price": null, "amount": null, "notes": ""},
+    {"product_name": "红萝卜", "unit": "斤", "quantity": 2, "unit_price": null, "amount": null, "notes": ""},
+    {"product_name": "玉米", "unit": "斤", "quantity": 1.5, "unit_price": null, "amount": null, "notes": ""},
+    {"product_name": "豆腐", "unit": "斤", "quantity": 4, "unit_price": null, "amount": null, "notes": ""},
+    {"product_name": "青豆", "unit": "斤", "quantity": 6, "unit_price": null, "amount": null, "notes": ""}
+  ],
+  "cancelled_lines": []
+}

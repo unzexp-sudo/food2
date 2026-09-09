@@ -28,7 +28,7 @@ class IntakeJob(TimestampMixin):
     document_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("intake_documents.id"), index=True, nullable=False
     )
-    status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)  # queued|processing|completed|failed
+    status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)  # queued|processing|completed|failed|needs_review
     error: Mapped[str | None] = mapped_column(Text)
     retry_count: Mapped[int] = mapped_column(default=0)
     draft_order_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("orders.id"))

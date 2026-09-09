@@ -32,6 +32,7 @@ import { useList, useMutate } from "../../api/hooks";
 import { formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 import ConfidenceTag from "../../components/ConfidenceTag";
+import IntakeReviewDrawer from "../../components/intake/IntakeReviewDrawer";
 import client from "../../api/client";
 import { parseStoredUser } from "../../types";
 
@@ -122,6 +123,17 @@ export default function IntakePage() {
   const [extractionData, setExtractionData] = useState<ExtractionResponse | null>(null);
   const [extractionLoading, setExtractionLoading] = useState(false);
   const [extractionError, setExtractionError] = useState<string | null>(null);
+
+  // Human-review drawer state (handwritten / low-confidence notes).
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewJobId, setReviewJobId] = useState<string | null>(null);
+  const [reviewFileUrl, setReviewFileUrl] = useState<string | null>(null);
+
+  const openReview = (jobId: string, fileUrl?: string | null) => {
+    setReviewJobId(jobId);
+    setReviewFileUrl(fileUrl ?? null);
+    setReviewOpen(true);
+  };
 
   const { loading: mutateLoading, run } = useMutate();
 
@@ -341,6 +353,16 @@ export default function IntakePage() {
               title={t("pages.intake.viewExtraction")}
             />
           )}
+          {canMutate && r.job?.status === "needs_review" && (
+            <Button
+              size="small"
+              type="primary"
+              icon={<EyeOutlined />}
+              onClick={() => openReview(r.job!.id, r.file_url)}
+            >
+              {t("pages.intake.review.title")}
+            </Button>
+          )}
           {canMutate && r.job && (r.job.status === "failed" || r.job.status === "completed") && (
             <Popconfirm
               title={t("pages.intake.retryConfirm")}
@@ -393,7 +415,7 @@ export default function IntakePage() {
           setStatusFilter(v);
           list.setPage(1);
         }}
-        options={["queued", "processing", "completed", "failed"].map((s) => ({
+        options={["queued", "processing", "completed", "failed", "needs_review"].map((s) => ({
           value: s,
           label: t(`status.intake.${s}`),
         }))}
@@ -558,6 +580,15 @@ export default function IntakePage() {
           <Typography.Text type="secondary">{t("pages.intake.extractionEmpty")}</Typography.Text>
         )}
       </Drawer>
+
+      <IntakeReviewDrawer
+        open={reviewOpen}
+        jobId={reviewJobId ?? ""}
+        fileUrl={reviewFileUrl}
+        canConfirm={canMutate}
+        onClose={() => setReviewOpen(false)}
+        onConfirmed={() => list.refresh()}
+      />
     </Card>
   );
 }
