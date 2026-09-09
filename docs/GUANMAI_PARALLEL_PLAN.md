@@ -351,4 +351,35 @@ curl -fsS https://wecom1-production.up.railway.app/wecom/health
 ```
 Both must return `200 {"status":"ok",…}`. If they do, the reconnect worked.
 
+### 9.11 Frontend build — keep ALL of `node_modules` in ONE vendor chunk
+
+food2's React SPA is served by FastAPI from `backend/static`. After the API/routing
+fixes, the page was still blank with TWO different boot-time crashes, both caused by
+Vite **circular vendor-chunk imports**:
+
+1. `Cannot read properties of undefined (reading 'version')` in the antd chunk →
+   the antd chunk's React import resolved to `undefined` because antd and react
+   were in separate chunks that cross-imported.
+2. `Cannot access 'fo' before initialization` (TDZ) in the vendor chunk → the
+   `react-vendor`↔`vendor` cycle persisted (antd's transitive deps like `dayjs`,
+   `scroll-into-view-if-needed` landed in `vendor` and referenced back).
+
+**Rule (see `frontend/vite.config.ts`):** `manualChunks` returns a single `"vendor"`
+chunk for anything under `node_modules`. Do NOT split antd / @ant-design / rc-* /
+react / scheduler into separate chunks — the resulting circular graph throws
+undefined-binding / TDZ errors at boot and the SPA renders blank. One big cached
+vendor chunk is the correct trade-off here.
+
+### 9.12 Canonical `*.up.railway.app` domain returns "Application not found"
+
+Railway serves each app at its **per-deployment** domain (e.g.
+`food2-production-7c23.up.railway.app`, `wecom1-production-4bc1.up.railway.app`),
+NOT the bare `food2-production.up.railway.app` / `wecom1-production.up.railway.app`
+form — those return `{"status":"error","code":404,"message":"Application not found"}`.
+So: either use the working per-deployment URL, or wire the **Namecheap custom
+domain** (§9.6: CNAME `erp`/`wecom` → the Railway target) and use
+`https://erp.yourdomain.com` / `https://wecom.yourdomain.com` as the real
+endpoints. The cross-referencing env vars in §9.4/§9.5 should then point at those
+custom domains.
+
 
