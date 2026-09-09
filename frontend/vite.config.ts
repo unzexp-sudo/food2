@@ -15,28 +15,26 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        // Split heavy vendors into their own long-cacheable chunks so they load
-        // in parallel and aren't re-downloaded when a feature chunk changes.
+        // Put ALL of node_modules into a single vendor chunk.
         //
-        // IMPORTANT: keep `antd` / `@ant-design` / `rc-*` and `react` /
-        // `scheduler` in the SAME chunk. Splitting them produces a circular
-        // chunk graph (antd ↔ react-vendor ↔ vendor) whose ES-module
-        // live-bindings resolve to `undefined` at evaluation time, so the
-        // antd chunk crashes with "Cannot read properties of undefined
-        // (reading 'version')" before React ever renders. One shared chunk
-        // removes the cycle entirely.
+        // We previously tried to split heavy vendors (antd, @ant-design, rc-*
+        // and react/scheduler) into a "react-vendor" chunk and everything
+        // else into a "vendor" chunk so they could be cached independently.
+        // That split produced CIRCULAR chunk imports: antd's transitive deps
+        // (e.g. dayjs, scroll-into-view-if-needed, compute-scroll-into-view)
+        // ended up in `vendor`, while antd itself lived in `react-vendor`,
+        // and a peer in `vendor` referenced back into `react-vendor`. The
+        // result was ES-module live-binding / TDZ errors at boot:
+        //   • "Cannot read properties of undefined (reading 'version')" in
+        //     the antd chunk (React binding was uninitialized)
+        //   • "Cannot access 'fo' before initialization" in the vendor chunk
+        //     (a let/const was read before the chunk's body had run)
+        // Merging everything into ONE chunk eliminates cross-vendor-chunk
+        // imports entirely, so cycles are impossible. The chunk is larger
+        // but only downloaded once and cached long-term — an acceptable
+        // trade-off for an internal ERP.
         manualChunks(id) {
-          if (!id.includes("node_modules")) return undefined;
-          if (
-            id.includes("antd") ||
-            id.includes("@ant-design") ||
-            id.includes("/rc-") ||
-            id.includes("react") ||
-            id.includes("scheduler")
-          ) {
-            return "react-vendor";
-          }
-          return "vendor";
+          if (id.includes("node_modules")) return "vendor";
         },
       },
     },
