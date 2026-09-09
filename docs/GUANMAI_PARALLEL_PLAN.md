@@ -295,11 +295,19 @@ Generate each once (e.g. `openssl rand -hex 16`) and set on **both** services.
   creates an intake job → OCR gate flags handwritten notes for review.
 
 ### 9.8 Troubleshooting
-- **"Application failed to respond"** → almost always an import-time crash. Open
-  the Railway deploy logs; look for `ModuleNotFoundError: No module named
-  'psycopg2'` or a dialect error. Fix = ensure the driver is in `requirements.txt`
-  (done for both) and harden `lifespan` (done). A DB blip alone should no longer
-  kill the container.
+- **"Application failed to respond" — wrong GitHub *source* repo (the cause we
+  actually hit):** If the code is fixed (psycopg2 present, `lifespan` hardened)
+  yet the link still errors, open Railway → Service → **Settings → Source** and
+  confirm the connected repo is `unzexp-sudo/food2` / `unzexp-sudo/WeCom1` on
+  branch `main`. A stale fork (`htjani/food2`) or a source the Railway GitHub
+  app can't read will keep rebuilding the OLD commit no matter how many times you
+  press **Redeploy** — "Redeploy" re-runs the *same pinned commit*, it never
+  pulls a newer one. Fix = disconnect and reconnect the source while logged into
+  GitHub as **`unzexp-sudo`** (see §9.10). This is the #1 recurring footgun here.
+- **"Application failed to respond" — import-time crash:** Open the Railway deploy
+  logs; look for `ModuleNotFoundError: No module named 'psycopg2'` or a dialect
+  error. Fix = ensure the driver is in `requirements.txt` (done for both) and
+  harden `lifespan` (done). A DB blip alone should no longer kill the container.
 - **Healthcheck times out** → confirm the path matches the `railway.toml`
   `healthcheckPath` (`/api/health` for food2, `/wecom/health` for WeCom1) and that
   the app binds to `${PORT}` (Railway injects `PORT`).
@@ -317,4 +325,30 @@ Generate each once (e.g. `openssl rand -hex 16`) and set on **both** services.
 3. Set all variables in §9.4, the two secrets in §9.5.
 4. Wire Namecheap CNAMEs (§9.6), wait for TLS, redeploy both.
 5. Run the §9.7 health curls.
+
+### 9.10 Guard — Railway GitHub source MUST be `unzexp-sudo/*` (not `htjani`)
+
+This is the single most common reason the links stay broken after a "successful"
+push. The Railway GitHub integration was originally authorized under the `htjani`
+identity, so it was reading `htjani/food2` (a stale fork that never received the
+psycopg2 fixes) and could not fire webhooks for `unzexp-sudo/*`. Symptoms:
+- Top Railway deployment commit is NOT `91a1983` (food2) / `1b26900` (WeCom1).
+- Manual **Redeploy** keeps rebuilding the *older* version.
+- `htjani/WeCom1` does not even exist, yet the WeCom1 deploy never updates.
+
+**Fix (Railway dashboard, ~2 min per service — cannot be done from CI/CLI):**
+1. Project → Service → **Settings → Source** (or "Connected Repository").
+2. Disconnect / Change source.
+3. Click **Deploy from GitHub** and **log in to GitHub as `unzexp-sudo`** (switch
+   accounts if it defaults to `htjani`).
+4. Select **`unzexp-sudo/food2`** and **`unzexp-sudo/WeCom1`**, branch **`main`**.
+5. Save → Railway builds `91a1983` / `1b26900`. Future `git push` auto-deploys.
+
+Verify the running source with:
+```bash
+curl -fsS https://food2-production.up.railway.app/api/health
+curl -fsS https://wecom1-production.up.railway.app/wecom/health
+```
+Both must return `200 {"status":"ok",…}`. If they do, the reconnect worked.
+
 
