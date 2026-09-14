@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     # Database (SQLite for dev/demo, PostgreSQL in production)
     database_url: str = f"sqlite:///{BACKEND_DIR / 'erp.db'}"
 
+    # Durability escape hatch. A container filesystem is ephemeral, so the
+    # default SQLite file is destroyed on every redeploy — taking every order,
+    # customer and conversation binding with it. In production we therefore
+    # refuse to start on SQLite unless this is explicitly acknowledged. Set it
+    # to true only if you have deliberately accepted that the data is
+    # disposable (a demo, a smoke test, a throwaway environment).
+    allow_ephemeral_database: bool = False
+
     # Auth
     secret_key: str = "dev-secret-change-me"
     algorithm: str = "HS256"

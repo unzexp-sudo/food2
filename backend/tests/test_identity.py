@@ -88,6 +88,72 @@ def test_second_confirmed_identity_for_the_same_chat_cannot_be_inserted(
         db.rollback()
 
 
+# ---------------------------------------------------------------------------
+# 1b. Orders arrive in GROUP CHATS — the room is the identity, not the sender
+# ---------------------------------------------------------------------------
+
+def test_a_group_chat_is_keyed_on_the_room_not_the_sender():
+    """The room belongs to the customer; its members change.
+
+    Keying on `external_userid` would identify one person inside the room, so a
+    single customer would fragment into a separate binding for every staff
+    member who happened to write — and a colleague writing in the same group
+    would resolve to nobody, or worse, to whatever that person was bound to.
+    """
+    from app.services.identity.service import chat_key
+
+    assert chat_key(external_userid="wmZhangSan", chat_id="wrCanteen") == (
+        "wecom_chat_id", "wrCanteen",
+    )
+    # A 1:1 conversation has no room, so it falls back to the contact.
+    assert chat_key(external_userid="wmZhangSan", chat_id=None) == (
+        "wecom_external_userid", "wmZhangSan",
+    )
+    # No stable identifier at all → nothing to bind on. Never the display name.
+    assert chat_key(external_userid=None, chat_id=None) is None
+
+
+def test_a_group_message_is_held_against_its_chat_id(client):  # noqa: F811
+    chat = _uniq("wrGroup")
+    r = _post_wecom(client, external_userid=_uniq("wmExt"), chat_id=chat)
+    assert r.status_code in (200, 201), r.text
+
+    block = _document_meta(r.json()["document_id"])["identity"]
+    assert block["status"] == "unbound"
+    assert block["kind"] == "wecom_chat_id", (
+        "a group order was keyed on the sender instead of the room"
+    )
+    assert block["value"] == chat
+
+
+def test_binding_the_room_resolves_a_different_sender(
+    client, admin_headers  # noqa: F811
+):
+    """The point of keying on the room: binding it covers everyone in it."""
+    chat = _uniq("wrGroup")
+    first = _post_wecom(client, external_userid=_uniq("wmBuyer"), chat_id=chat)
+    assert first.status_code in (200, 201), first.text
+
+    customer_id = _get_customer_id(client, admin_headers)
+    r = client.post(
+        "/api/v1/identity/bind",
+        json={"kind": "wecom_chat_id", "value": chat, "customer_id": customer_id},
+        headers=admin_headers,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["released"] >= 1
+
+    # A *different* person writing in the same group now resolves too.
+    second = _post_wecom(client, external_userid=_uniq("wmColleague"), chat_id=chat)
+    assert second.status_code in (200, 201), second.text
+    assert second.json()["customer_id"] == customer_id
+
+    block = _document_meta(second.json()["document_id"])["identity"]
+    assert block["status"] == "bound"
+    assert block["kind"] == "wecom_chat_id"
+    assert block["method"] == "identity"
+
+
 def test_the_index_is_partial_so_proposals_may_coexist(
     client,  # noqa: F811 — boots the schema
 ):

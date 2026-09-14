@@ -44,16 +44,25 @@ def _now() -> datetime:
 # --- Chat keys ----------------------------------------------------------------
 
 def chat_key(*, external_userid: str | None, chat_id: str | None) -> tuple[str, str] | None:
-    """The (kind, value) we bind on. Prefer `external_userid`, else `chat_id`.
+    """The (kind, value) we bind on. Prefer `chat_id`, else `external_userid`.
 
-    Both are stable WeCom identifiers. A display name is never acceptable: a
-    customer can rename themselves at will, and binding on it would let a
-    rename silently redirect somebody else's orders.
+    Orders arrive in **group chats**, and the group is what belongs to the
+    customer: its members change over time, the customer does not. Binding on
+    `external_userid` instead would identify one person inside the room, so the
+    same customer would fragment into a separate binding for every staff member
+    who happened to write — and a mis-bound colleague would silently send
+    somebody else's order to that customer.
+
+    A 1:1 conversation has no `chat_id` and falls back to the contact.
+
+    A display name is never acceptable for either: a customer can rename
+    themselves at will, and binding on a name would let a rename silently
+    redirect somebody else's orders.
     """
-    if external_userid:
-        return ("wecom_external_userid", str(external_userid))
     if chat_id:
         return ("wecom_chat_id", str(chat_id))
+    if external_userid:
+        return ("wecom_external_userid", str(external_userid))
     return None
 
 
@@ -98,12 +107,12 @@ def resolve_chat(
 ) -> CustomerIdentity | None:
     """The confirmed identity for this conversation, or None.
 
-    `external_userid` is tried first (it identifies the person), then `chat_id`
-    (it identifies the room, which is the right key when members change). Only
-    `confirmed` rows count — a proposal is not a binding.
+    `chat_id` is tried first — the room belongs to the customer and survives its
+    members changing — then `external_userid` for 1:1 conversations. Only
+    `confirmed` rows count; a proposal is not a binding.
     """
-    for kind, value in (("wecom_external_userid", external_userid),
-                        ("wecom_chat_id", chat_id)):
+    for kind, value in (("wecom_chat_id", chat_id),
+                        ("wecom_external_userid", external_userid)):
         if not value:
             continue
         row = (

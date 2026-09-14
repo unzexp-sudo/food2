@@ -28,7 +28,7 @@ colliding.
 |---|---|---|
 | `id` | UUID PK | follow `UUIDMixin` |
 | `customer_id` | String(36) FK customers.id, indexed | |
-| `kind` | String(30) | `wecom_external_userid` \| `wecom_chat_id` |
+| `kind` | String(30) | `wecom_chat_id` (group — the normal case) \| `wecom_external_userid` (1:1 fallback) |
 | `value` | String(200) | the stable WeCom identifier |
 | `status` | String(20) | `proposed` \| `confirmed` \| `rejected` |
 | `confirmed_by` | String(36) FK users.id, nullable | |
@@ -106,7 +106,9 @@ Agent 1 imports this module; Agent 2 creates it. Do not edit each other's file.
 ### 2.1 Resolve on ingest
 In `services/intake/wecom_intake.py:ingest_wecom_message`, after the document
 exists:
-1. Build the chat key: prefer `external_userid`, else `chat_id`.
+1. Build the chat key: prefer **`chat_id`** (orders arrive in group chats, and
+   the room belongs to the customer — its members change, the customer does
+   not), else `external_userid` for 1:1 conversations.
 2. Look up a **confirmed** identity. If found → set `doc.customer_id`, record
    `document_meta["identity"] = {"status": "bound", "identity_id": ...,
    "method": ..., "confirmed_by": ...}`.
@@ -205,9 +207,51 @@ block with all fields, a block with only a name, a block with nothing
 
 ## 6. Definition of done
 
-- New backend tests pass **and** the existing suite still passes
-  (baseline: 370 passed, 2 skipped).
+- New backend tests pass **and** the existing suite still passes.
 - `npx tsc -b --force` exit 0.
 - No agent has committed anything.
 - Each agent reports: files changed, tests added, any contract it had to
   change, anything it could not finish.
+
+---
+
+## 7. Decisions taken after the build (2026-09-14)
+
+### 7.1 The channel is a **group chat** — bind on `chat_id`
+
+`chat_key()` and `resolve_chat()` now prefer `chat_id`, falling back to
+`external_userid` only for 1:1 conversations.
+
+Why it matters: keying on `external_userid` identifies *one person inside the
+room*. Members change; the customer does not. Keying on the person would
+fragment a single customer into a separate binding per staff member, and a
+colleague writing in the same group would resolve to nobody — or, worse, to
+whatever that person happened to be bound to.
+
+Tests: `test_a_group_chat_is_keyed_on_the_room_not_the_sender`,
+`test_a_group_message_is_held_against_its_chat_id`,
+`test_binding_the_room_resolves_a_different_sender`.
+
+### 7.2 Auto-release on bind is safe, because the human gates are downstream
+
+Binding a chat releases its held documents — it does **not** process them. A
+released document still has to pass, in order:
+
+1. **Gate 2** — `POST /intake/jobs/{id}/confirm-review`: a human confirms the
+   OCR reading. The pipeline parks every unbound document at `needs_review` and
+   creates no Order, so there is nothing to release *into* an order.
+2. **Delivery confirmation** — `POST /orders/{id}/confirm-delivery`.
+3. **Gate 3** — `POST /orders/{id}/confirm`: a human confirms the order, and
+   `assert_delivery_confirmed` must pass first.
+
+So auto-release removes a delay, not a check. Nothing becomes an order without
+two human actions after the bind.
+
+### 7.3 Data durability — a hard boot guard, not a reminder
+
+Both apps refuse to start when a deploy marker is present and the database is
+SQLite. See `CUSTOMER_MATCHING_PLAN.md` §4. Escape hatch:
+`ERP_ALLOW_EPHEMERAL_DATABASE` / `WECOM_ALLOW_EPHEMERAL_DATABASE`.
+
+Still open: stored files and media are also on the ephemeral filesystem and
+still need a volume or object storage.

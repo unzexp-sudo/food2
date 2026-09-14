@@ -114,15 +114,40 @@ The gateway already has `wecom_contacts.customer_id`, but:
   the UI, which is one more thing to fail silently;
 - **durability (see below).**
 
-### Durability — check this before anything goes live
+### Durability — resolved with a hard boot guard (2026-09-14)
 
 Both services default to SQLite **inside the container**:
 `WeCom1` → `sqlite:///<repo>/data/wecom.db`, `food2` → `sqlite:///<repo>/erp.db`,
-and neither `railway.toml` declares a volume. On Railway the filesystem is
-ephemeral, so **without `WECOM_DATABASE_URL` / `ERP_DATABASE_URL` pointed at
-Railway Postgres, every binding — and every order — is destroyed on redeploy.**
-Confirm these are set in production. If they are not, that is a P0 regardless
-of anything in this document.
+and neither `railway.toml` declares a volume. A container filesystem is
+ephemeral, so without Postgres a redeploy deletes every order, every customer
+and every conversation binding.
+
+Rather than rely on someone remembering to set an environment variable, **both
+apps now refuse to start** when they detect a deployed container
+(`RAILWAY_ENVIRONMENT`, `RAILWAY_PROJECT_ID`, `DYNO`, or
+`ENVIRONMENT`/`APP_ENV=production`) *and* the database URL is SQLite:
+
+```
+REFUSING TO START: the database is SQLite inside an ephemeral container
+filesystem.
+Fix: add the Postgres service to this Railway project and set
+    ERP_DATABASE_URL=${{Postgres.DATABASE_URL}}
+```
+
+- Escape hatch for a deliberate throwaway environment:
+  `ERP_ALLOW_EPHEMERAL_DATABASE=true` / `WECOM_ALLOW_EPHEMERAL_DATABASE=true`.
+- Local runs and the test suite are unaffected — nothing sets those markers.
+- Tests: `backend/tests/test_durable_database.py`,
+  `WeCom1/tests/test_durable_database.py`.
+
+Failing to boot is a bad afternoon. Silently losing the order book is a bad
+year, and it is the kind of loss nobody notices until the goods have already
+gone somewhere.
+
+**Still open (not covered by this guard):** `ERP_FILES_DIR` and the gateway's
+`data/wecom` media directory are also on the ephemeral filesystem, so stored
+order images and attachments are lost on redeploy even with Postgres. Those
+need a Railway volume or object storage — see §9 open questions.
 
 ---
 

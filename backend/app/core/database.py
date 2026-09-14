@@ -1,6 +1,8 @@
 """Database engine, session, and declarative base. SQLite-compatible."""
 from __future__ import annotations
 
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -11,6 +13,59 @@ class Base(DeclarativeBase):
     pass
 
 
+# Environment variables that mean "this is a deployed container, not a laptop".
+_PRODUCTION_MARKERS = ("RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID", "DYNO")
+
+
+def is_deployed() -> bool:
+    """True when we look like we are running in a hosted container."""
+    if any(os.environ.get(name) for name in _PRODUCTION_MARKERS):
+        return True
+    for name in ("ENVIRONMENT", "APP_ENV", "ERP_ENVIRONMENT"):
+        if (os.environ.get(name) or "").strip().lower() in ("production", "prod"):
+            return True
+    return False
+
+
+def assert_durable_database(url: str, *, allow_ephemeral: bool) -> None:
+    """Refuse to start on a database that a redeploy will destroy.
+
+    A hosted container gets an ephemeral filesystem. The default SQLite file
+    lives *inside* that filesystem, so every deploy silently deletes the whole
+    database — orders, customers, and the conversation bindings that decide
+    which customer an order belongs to.
+
+    Failing to boot is a bad afternoon. Silently losing the order book is a bad
+    year, and it is the kind of loss nobody notices until the goods have already
+    gone somewhere. So this is deliberately a hard stop: point
+    `ERP_DATABASE_URL` at the Postgres service and it goes away.
+
+    Local runs and the test suite are unaffected — nothing sets these markers.
+    """
+    if allow_ephemeral or not url.startswith("sqlite"):
+        return
+    if not is_deployed():
+        return
+
+    raise RuntimeError(
+        "\n"
+        "REFUSING TO START: the database is SQLite inside an ephemeral "
+        "container filesystem.\n"
+        "\n"
+        "Every redeploy of this service destroys the filesystem, and with it "
+        "the entire database — every order, every customer, and every "
+        "WeCom conversation binding.\n"
+        "\n"
+        "Fix: add the Postgres service to this Railway project and set\n"
+        "    ERP_DATABASE_URL=${{Postgres.DATABASE_URL}}\n"
+        "in the service variables, then redeploy.\n"
+        "\n"
+        "If the data really is disposable (a demo or a smoke test), set\n"
+        "    ERP_ALLOW_EPHEMERAL_DATABASE=true\n"
+        "to accept the loss explicitly.\n"
+    )
+
+
 def _make_engine(url: str):
     kwargs: dict = {}
     if url.startswith("sqlite"):
@@ -18,6 +73,10 @@ def _make_engine(url: str):
         kwargs["connect_args"] = {"check_same_thread": False}
     return create_engine(url, pool_pre_ping=True, **kwargs)
 
+
+assert_durable_database(
+    settings.database_url, allow_ephemeral=settings.allow_ephemeral_database
+)
 
 engine = _make_engine(settings.database_url)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)

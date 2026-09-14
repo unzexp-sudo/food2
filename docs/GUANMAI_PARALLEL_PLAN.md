@@ -232,7 +232,7 @@ bound to `PORT`.
 **food2 ERP** (set in Railway → Service → Variables):
 | Variable | Example / note |
 |---|---|
-| `ERP_DATABASE_URL` | Railway Postgres plugin connection string, **or** unset → SQLite fallback |
+| `ERP_DATABASE_URL` | **Required in production.** Railway Postgres plugin connection string. Leaving it unset means SQLite inside the container, which the app now **refuses to boot on** when a deploy marker is present (see `docs/CUSTOMER_MATCHING_PLAN.md` §4). `ERP_ALLOW_EPHEMERAL_DATABASE=true` overrides, for throwaway environments only. |
 | `ERP_SECRET_KEY` | `openssl rand -hex 32` (generate once, keep it) |
 | `ERP_AI_PROVIDER` | `mock` (default, no external calls) or `openai` |
 | `ERP_OPENAI_API_KEY` | only if `ERP_AI_PROVIDER=openai` |
@@ -251,7 +251,7 @@ bound to `PORT`.
 **WeCom1 gateway** (set in Railway → Service → Variables):
 | Variable | Example / note |
 |---|---|
-| `WECOM_DATABASE_URL` | Postgres plugin string, **or** unset → SQLite fallback |
+| `WECOM_DATABASE_URL` | **Required in production.** Postgres plugin string. Losing the SQLite fallback means losing the message log — the dedupe record that stops a retry becoming a second order — so the app refuses to boot without it when a deploy marker is present. `WECOM_ALLOW_EPHEMERAL_DATABASE=true` overrides, for mock/throwaway only. |
 | `WECOM_MODE` | `mock` (default) until going live |
 | `WECOM_CORP_ID` / `WECOM_AGENT_ID` / `WECOM_SECRET` / `WECOM_TOKEN` / `WECOM_ENCODING_AES_KEY` | live WeCom only |
 | `WECOM_DECRYPT_PROVIDER` | `pure` (RSA/AES via `cryptography`, no vendor binary) |
