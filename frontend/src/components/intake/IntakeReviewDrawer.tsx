@@ -82,6 +82,12 @@ export default function IntakeReviewDrawer({
   const lines = raw?.lines ?? [];
   const orderedCount = lines.filter((l) => !l.cancelled).length;
   const cancelledCount = lines.filter((l) => l.cancelled).length;
+  // Matches ConfidenceTag: ≥0.95 is green. Below that we may honestly warn
+  // that the parse is uncertain; at or above it, asking for a check is still
+  // right but claiming low confidence would be a lie.
+  const isLowConfidence =
+    typeof raw?.ocr_overall_confidence === "number" &&
+    raw.ocr_overall_confidence < 0.95;
 
   const handleConfirm = async () => {
     await run(
@@ -174,7 +180,13 @@ export default function IntakeReviewDrawer({
         <Space direction="vertical" style={{ width: "100%" }} size="middle">
           <Space wrap>
             <StatusTag domain="intake" value="needs_review" />
-            <Typography.Text strong>{t("pages.intake.review.needsReview")}</Typography.Text>
+            <Typography.Text strong>
+              {/* Only claim uncertainty when the parse actually was uncertain.
+                  Every order stops here now, confident or not. */}
+              {isLowConfidence
+                ? t("pages.intake.review.needsReview")
+                : t("pages.intake.review.verifyTitle")}
+            </Typography.Text>
             {typeof raw.ocr_overall_confidence === "number" && (
               <ConfidenceTag value={raw.ocr_overall_confidence} />
             )}
@@ -183,11 +195,19 @@ export default function IntakeReviewDrawer({
           </Space>
 
           <Alert
-            type="warning"
+            type={isLowConfidence ? "warning" : "info"}
             showIcon
-            icon={<WarningOutlined />}
-            message={t("pages.intake.review.needsReview")}
-            description={t("pages.intake.review.lowConfidence")}
+            icon={isLowConfidence ? <WarningOutlined /> : undefined}
+            message={
+              isLowConfidence
+                ? t("pages.intake.review.needsReview")
+                : t("pages.intake.review.verifyTitle")
+            }
+            description={
+              isLowConfidence
+                ? t("pages.intake.review.lowConfidence")
+                : t("pages.intake.review.verifyBody")
+            }
           />
 
           <Space align="start" size="large" style={{ width: "100%" }}>

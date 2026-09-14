@@ -10,3 +10,39 @@ body {
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
+
+/* --- Intake inbox: unreviewed orders look like unread mail -------------------
+   An order parked in `needs_review` has not been seen by a human yet, so it is
+   bolded with a coloured left edge — the same visual grammar an email client
+   uses for unread messages. Once someone confirms it, the row settles back to
+   normal weight and the queue shrinks. */
+.ant-table-tbody > tr.intake-row-unreviewed > td {
+  font-weight: 600;
+  background: rgba(250, 173, 20, 0.08);
+}
+
+.ant-table-tbody > tr.intake-row-unreviewed > td:first-child {
+  box-shadow: inset 3px 0 0 0 #faad14;
+}
+
+.ant-table-tbody > tr.intake-row-unreviewed:hover > td {
+  background: rgba(250, 173, 20, 0.16) !important;
+}
+
+/* --- Orders list: unconfirmed orders use the same "unread" grammar -----------
+   Deliberately identical to the intake rule above: amber + bold means "a
+   person still has to act on this row", and it should mean exactly that
+   everywhere. After a human confirms the order it drops back to normal weight
+   and the queue shrinks — the same way an email stops being bold once read. */
+.ant-table-tbody > tr.order-row-awaiting > td {
+  font-weight: 600;
+  background: rgba(250, 173, 20, 0.08);
+}
+
+.ant-table-tbody > tr.order-row-awaiting > td:first-child {
+  box-shadow: inset 3px 0 0 0 #faad14;
+}
+
+.ant-table-tbody > tr.order-row-awaiting:hover > td {
+  background: rgba(250, 173, 20, 0.16) !important;
+}

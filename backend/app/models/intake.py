@@ -28,7 +28,9 @@ class IntakeJob(TimestampMixin):
     document_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("intake_documents.id"), index=True, nullable=False
     )
-    status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)  # queued|processing|completed|failed|needs_review
+    # `parked` = Gate 1 decided this is not an order, so no pipeline ran. It is
+    # terminal but reversible: a human can promote it back to queued.
+    status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)  # queued|processing|completed|failed|needs_review|parked
     error: Mapped[str | None] = mapped_column(Text)
     retry_count: Mapped[int] = mapped_column(default=0)
     draft_order_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("orders.id"))

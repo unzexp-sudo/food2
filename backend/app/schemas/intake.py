@@ -12,7 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 SourceType = Literal["text", "image", "pdf", "excel", "email_body"]
-JobStatus = Literal["queued", "processing", "completed", "failed"]
+# Keep in step with IntakeJob.status. `needs_review` is Gate 2 (a human must
+# check the extraction); `parked` is Gate 1 (triage decided it is not an order).
+# Both were missing here, which would reject them if ever used for validation.
+JobStatus = Literal[
+    "queued", "processing", "completed", "failed", "needs_review", "parked"
+]
 
 
 # --- Submit -------------------------------------------------------------------

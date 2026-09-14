@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.ai.adapters import FORM_TYPES, get_extractor
 from app.ai.matching import match_product, match_unit
 from app.core.audit import log_audit
+from app.core.config import settings
 from app.core.events import emit
 from app.core.numbers import next_number
 from app.models import (
@@ -155,7 +156,14 @@ def process_intake_job(db: Session, job_id: str) -> None:
         # real OCR providers (aliyun_qwen) it is set by apply_review_gate and
         # encodes the "0 assumptions" rule: a recognized handwritten note is
         # NEVER auto-submitted — a human must confirm it first.
-        requires_review = bool(getattr(extraction, "requires_human_review", False))
+        #
+        # `intake_require_human_review` widens that rule from "risky documents"
+        # to EVERY document. Business rule: a wrong order shipping is far more
+        # costly than the few seconds a human spends confirming, so extractor
+        # confidence never buys an auto-approval.
+        requires_review = bool(
+            getattr(extraction, "requires_human_review", False)
+        ) or settings.intake_require_human_review
 
         # Step 4 + 5: normalize + match SKUs
         lines = _normalize_lines(

@@ -12,6 +12,16 @@ const extra = {
     preview: "Preview",
   },
   pages: {
+    dashboard: {
+      needsAttention: "Needs your attention",
+      waitingReview: "{{count}} order(s) waiting for review",
+      waitingConfirm: "{{count}} order(s) waiting for confirmation",
+      nothingWaiting: "Nothing is waiting — every order has been checked.",
+      // Not "needs attention" — parked messages need no action, they just
+      // must not be invisible.
+      parkedInfo: "{{count}} message(s) parked as non-orders and hidden from the inbox",
+      reviewParked: "Check them",
+    },
     sales: {
       quotationPreview: {
         product: "Product",
@@ -47,6 +57,15 @@ const extra = {
       },
     },
     orders: {
+      // Gate 3: the order exists, but nobody has confirmed it yet.
+      awaitingBanner: "{{count}} order(s) waiting for confirmation",
+      awaitingHint:
+        "Bold rows need a person to confirm them. No order is sent or processed until then.",
+      awaitingConfirmTitle: "This order is not confirmed yet",
+      awaitingConfirmBody:
+        "Nothing happens automatically from here. Check the lines below, then confirm to send this order on.",
+      awaitingConfirmNoPermission:
+        "Nothing happens automatically from here. Someone with ops or admin rights has to confirm it.",
       orderTimeline: {
         draft: "Order created",
         pendingConfirmation: "Pending confirmation",
@@ -55,6 +74,32 @@ const extra = {
         fulfilled: "Fulfilled",
         invoiced: "Invoiced",
         needsClarification: "Needs clarification",
+      },
+    },
+    intake: {
+      // The "unread" queue: orders parked until a human confirms them.
+      pendingBanner: "{{count}} order(s) waiting for review",
+      pendingOnly: "Pending only",
+      showAll: "Show all",
+      unreviewed: "Unreviewed",
+      waitingSince: "Waiting since {{time}}",
+      reviewHint: "Bold rows still need a person to check them before an order is created.",
+      // Parked messages (greetings, "收到", stickers) are hidden from the
+      // inbox by default. They must stay reachable: a wrongly-parked message
+      // is a lost order, so surface the count and offer a way back.
+      parkedBanner: "{{count}} message(s) parked as non-orders",
+      parkedOnly: "Parked only",
+      parkedHint:
+        "These looked like chatter, not orders. If one is actually an order, promote it back into the queue.",
+      promote: "Promote",
+      promoteConfirm: "Put this message back in the intake queue?",
+      promoteSuccess: "Message promoted back to the queue",
+      review: {
+        // Every order now stops for review — not just the low-confidence ones —
+        // so the drawer must not claim the parse was uncertain when it wasn't.
+        verifyTitle: "Check this before it becomes an order",
+        verifyBody:
+          "No order exists yet. Compare the lines below against the original, then confirm.",
       },
     },
     warehouse: {

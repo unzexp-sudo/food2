@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card, Col, Row, Statistic, Table, Typography, Button, Space, Spin } from "antd";
+import { Alert, Card, Col, Row, Statistic, Table, Typography, Button, Space, Spin } from "antd";
 import {
   InboxOutlined,
   ShoppingCartOutlined,
   DatabaseOutlined,
   CarOutlined,
+  ExclamationCircleOutlined,
 } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
 import { api, type Page } from "../../api/client";
@@ -15,7 +16,9 @@ import { pickName } from "../../utils/format";
 /** Minimal row shape — only the fields the dashboard table renders. */
 interface OrderRow {
   id: string;
-  code: string;
+  // The API serialises this as `order_number` — `code` rendered an empty
+  // column on the dashboard's recent-orders table.
+  order_number: string;
   customer_name_en: string | null;
   customer_name_zh: string | null;
   status: string;
@@ -27,6 +30,36 @@ async function safeTotal(url: string): Promise<number> {
   try {
     const res = await api.get<{ total: number }>(url, { page: 1, page_size: 1 });
     return res.total ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Orders parked at Gate 1/2 — extraction done, human check outstanding. */
+async function safeReviewCount(): Promise<number> {
+  try {
+    const res = await api.get<{ pending_review: number }>("/intake/review-count");
+    return res.pending_review ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Gate 3 — the order exists, but nobody has confirmed it yet. */
+async function safeConfirmCount(): Promise<number> {
+  try {
+    const res = await api.get<{ awaiting_confirmation: number }>("/orders/confirm-count");
+    return res.awaiting_confirmation ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Messages Gate 1 set aside as "not an order" — hidden from the inbox. */
+async function safeParkedCount(): Promise<number> {
+  try {
+    const res = await api.get<{ parked: number }>("/intake/review-count");
+    return res.parked ?? 0;
   } catch {
     return 0;
   }
@@ -47,17 +80,27 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [counts, setCounts] = useState({ orders: 0, pos: 0, inventory: 0, deliveries: 0 });
   const [recent, setRecent] = useState<OrderRow[]>([]);
+  // The two human gates. Nothing processes itself, so these are the queues a
+  // person has to clear — surfaced here rather than pushed anywhere.
+  const [waiting, setWaiting] = useState({ review: 0, confirm: 0, parked: 0 });
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [orders, pos, inventory, deliveries] = await Promise.all([
+      const [orders, pos, inventory, deliveries, review, toConfirm, parked] = await Promise.all([
         safeTotal("/orders"),
         safeTotal("/purchase-orders"),
         safeTotal("/warehouse/inventory"),
         safeTotal("/delivery"),
+        safeReviewCount(),
+        // Counted server-side: "waiting on a human" spans draft +
+        // pending_confirmation + needs_clarification, and /orders only
+        // filters by one status at a time.
+        safeConfirmCount(),
+        safeParkedCount(),
       ]);
       if (!cancelled) setCounts({ orders, pos, inventory, deliveries });
+      if (!cancelled) setWaiting({ review, confirm: toConfirm, parked });
 
       let rows: OrderRow[] = [];
       try {
@@ -99,6 +142,48 @@ export default function DashboardPage() {
       </Typography.Title>
 
       <Spin spinning={loading}>
+        {waiting.review + waiting.confirm > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            icon={<ExclamationCircleOutlined />}
+            style={{ marginBottom: 16 }}
+            message={t("pages.dashboard.needsAttention")}
+            description={
+              <Space direction="vertical" size={4}>
+                {waiting.review > 0 && (
+                  <Button type="link" style={{ padding: 0 }} onClick={() => navigate("/intake")}>
+                    {t("pages.dashboard.waitingReview", { count: waiting.review })} →
+                  </Button>
+                )}
+                {waiting.confirm > 0 && (
+                  <Button type="link" style={{ padding: 0 }} onClick={() => navigate("/orders")}>
+                    {t("pages.dashboard.waitingConfirm", { count: waiting.confirm })} →
+                  </Button>
+                )}
+              </Space>
+            }
+          />
+        )}
+
+        {/* Kept separate from the "needs attention" alert on purpose: parked
+            messages are not work, and mixing them in would make the real
+            queue harder to read. But they are hidden from the inbox, so they
+            have to be visible somewhere or a wrong park is unrecoverable. */}
+        {waiting.parked > 0 && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={t("pages.dashboard.parkedInfo", { count: waiting.parked })}
+            action={
+              <Button size="small" onClick={() => navigate("/intake")}>
+                {t("pages.dashboard.reviewParked")}
+              </Button>
+            }
+          />
+        )}
+
         <Row gutter={[16, 16]}>
           {kpis.map((k) => (
             <Col key={k.key} xs={24} sm={12} md={6}>
@@ -124,7 +209,7 @@ export default function DashboardPage() {
                 pagination={false}
                 locale={{ emptyText: t("common.noData") }}
                 columns={[
-                  { title: t("common.code"), dataIndex: "code", key: "code" },
+                  { title: t("common.code"), dataIndex: "order_number", key: "order_number" },
                   {
                     title: t("nav.customers"),
                     key: "customer",

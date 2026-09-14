@@ -118,6 +118,7 @@ const zh = {
       completed: "已完成",
       failed: "失败",
       needs_review: "待人工审核",
+      parked: "已归档（非订单）",
     },
     pick: {
       open: "待拣货",

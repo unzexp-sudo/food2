@@ -25,6 +25,7 @@ from datetime import datetime, time, timezone
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_audit
+from app.core.config import settings
 from app.core.events import emit, on
 from app.models import Order, OrderLine, SystemSetting
 from app.services.orders.orders import lock_contract_prices
@@ -41,13 +42,19 @@ def _get_setting(db: Session, key: str) -> dict | str | None:
 
 
 def _auto_confirm_settings(db: Session) -> tuple[bool, float]:
-    """Returns (enabled, min_confidence) with defaults if missing."""
+    """Returns (enabled, min_confidence) with defaults if missing.
+
+    When the SystemSetting row is absent the answer is DISABLED. Shipping an
+    "auto-confirm by default" behaviour means an unconfigured system quietly
+    confirms real orders with nobody watching, which is the one failure mode
+    that cannot be walked back — the customer has already been told.
+    """
     val = _get_setting(db, "auto_confirm")
     if isinstance(val, dict):
-        enabled = bool(val.get("enabled", True))
+        enabled = bool(val.get("enabled", False))
         min_conf = float(val.get("min_confidence", _DEFAULT_MIN_CONFIDENCE))
         return enabled, min_conf
-    return True, _DEFAULT_MIN_CONFIDENCE
+    return False, _DEFAULT_MIN_CONFIDENCE
 
 
 def _cutoff_setting(db: Session) -> time:
@@ -80,6 +87,20 @@ def handle_draft_created(*, db: Session, order: Order) -> None:
     can log a friendlier message and leave the order in a sane state.
     """
     try:
+        # Business rule, stated by the customer: an order is never processed
+        # without a human confirming it — not overnight, not at high
+        # confidence, not ever. This guard sits above the `auto_confirm`
+        # SystemSetting on purpose: that setting is editable from the settings
+        # UI, and a rule this important must not be one dropdown away from
+        # being switched off by accident.
+        if settings.orders_require_human_confirmation:
+            logger.info(
+                "order.draft_created: order %s left as draft — "
+                "orders_require_human_confirmation is on, a person must confirm it",
+                getattr(order, "id", "?"),
+            )
+            return
+
         # Reload the order from the passed session in case the caller's
         # identity map differs (intake pipeline commits first, then emits).
         o = db.get(Order, order.id) if order is not None else None

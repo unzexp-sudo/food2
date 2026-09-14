@@ -71,6 +71,30 @@ class Settings(BaseSettings):
     # math checks. Handwritten decimals are noisy, so leave some slack.
     ocr_math_abs_tol: float = 1.0
 
+    # Require a human to confirm EVERY extraction before a draft order is
+    # created — regardless of how confident the extractor is. The business rule
+    # is "a wrong order shipping is a disaster", so confidence is never a
+    # substitute for a person checking. Set to False only to restore
+    # auto-approval of high-confidence documents.
+    intake_require_human_review: bool = True
+
+    # HARD RULE: no order is ever processed without a person confirming it.
+    # Gate 2 above makes a human approve the *extraction*; this makes a human
+    # approve the *order*. Without it, auto-confirm would flip a high-
+    # confidence draft straight to "confirmed" with confirmed_by=None —
+    # locking contract prices and notifying the customer with nobody's
+    # sign-off, including in the middle of the night. Set to False only to
+    # restore confidence-based auto-confirmation.
+    orders_require_human_confirmation: bool = True
+
+    # Gate 1: keep non-orders ("你好", "收到", "谢谢") out of the intake inbox.
+    #   "off"     — no classification at all, behave exactly as before
+    #   "shadow"  — classify and record the verdict, change NO behaviour
+    #   "enforce" — non-orders are parked, only orders create an intake job
+    # Default is "shadow" so the verdicts can be reviewed in production before
+    # anything starts being hidden from the team.
+    intake_triage_mode: str = "shadow"
+
     # CORS
     cors_origins: str = "http://localhost:5173"
 
@@ -82,6 +106,10 @@ class Settings(BaseSettings):
     wecom_gateway_key: str = "dev-gateway-key"
     # Master switch for outbound customer notifications.
     notify_enabled: bool = True
+    # Internal WeCom group chat that receives "an order is waiting for review"
+    # alerts. Empty means no push is sent — the in-app review queue remains the
+    # source of truth, so the order is never lost, just not announced.
+    wecom_ops_chat_id: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

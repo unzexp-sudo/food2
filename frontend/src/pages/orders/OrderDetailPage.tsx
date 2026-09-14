@@ -470,6 +470,22 @@ export default function OrderDetailPage() {
           ) : null
         }
       >
+        {/* Nothing confirms an order by itself any more, so an unconfirmed
+            order is a decision waiting to be made — say so out loud rather
+            than leaving the operator to infer it from the status tag. */}
+        {EDITABLE_STATUSES.has(order.status) && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={t("pages.orders.awaitingConfirmTitle")}
+            description={
+              canMutate
+                ? t("pages.orders.awaitingConfirmBody")
+                : t("pages.orders.awaitingConfirmNoPermission")
+            }
+          />
+        )}
         <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
           {
             key: "details",

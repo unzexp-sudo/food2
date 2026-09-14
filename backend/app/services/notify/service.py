@@ -78,12 +78,17 @@ def notify(
     payload: dict,
     order_id: str | None = None,
     locale: str = "zh",
+    chat_id: str | None = None,
 ) -> dict:
     """Ask the WeCom Gateway to send `template` to `customer_id`.
 
+    `chat_id` targets an internal group instead of a customer — used for ops
+    alerts ("an order is waiting for review"), which must reach the team rather
+    than the person who placed the order.
+
     Returns one of:
       {"status": "disabled"}                       notify_enabled is false
-      {"status": "skipped", "reason": ...}         nothing to send / no customer
+      {"status": "skipped", "reason": ...}         nothing to send / no destination
       {"status": "sent",    "response": {...}}     gateway accepted
       {"status": "failed",  "error": "..."}        gateway unreachable or rejected
 
@@ -92,13 +97,14 @@ def notify(
     try:
         if not settings.notify_enabled:
             return {"status": "disabled"}
-        if not customer_id:
-            return {"status": "skipped", "reason": "no customer"}
+        if not customer_id and not chat_id:
+            return {"status": "skipped", "reason": "no destination"}
 
         url = f"{(settings.wecom_gateway_url or '').rstrip('/')}/wecom/send"
         body = {
             "template": template,
             "customer_id": customer_id,
+            "chat_id": chat_id,
             "order_id": order_id,
             "locale": locale if locale in _VALID_LOCALES else _DEFAULT_LOCALE,
             "payload": _json_safe(payload or {}),

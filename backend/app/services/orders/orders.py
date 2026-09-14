@@ -109,13 +109,17 @@ def list_orders(
     db: Session,
     *,
     status: str | None = None,
+    statuses: list[str] | None = None,
     customer_id: str | None = None,
     delivery_date: date | None = None,
     q: str | None = None,
+    awaiting_first: bool = False,
 ) -> tuple[list[dict], int]:
     q_ = db.query(Order)
     if status:
         q_ = q_.filter(Order.status == status)
+    if statuses:
+        q_ = q_.filter(Order.status.in_(statuses))
     if customer_id:
         q_ = q_.filter(Order.customer_id == customer_id)
     if delivery_date:
@@ -126,7 +130,22 @@ def list_orders(
     total = q_.count()
     orders = q_.order_by(Order.created_at.desc()).all()
     items = [_order_out(db, o, include_lines=False) for o in orders]
+    if awaiting_first:
+        # Orders a person still has to confirm float to the top, so the
+        # confirmation queue is the first thing an operator sees.
+        items.sort(key=lambda o: 0 if o["status"] in CONFIRMABLE else 1)
     return items, total
+
+
+def count_awaiting_confirmation(db: Session) -> int:
+    """How many orders are waiting on a person to confirm them.
+
+    Mirrors `count_pending_review` for the intake gate. This is the number the
+    UI badges and the dashboard alert read — with auto-confirm disabled it is
+    the queue that has to be cleared by hand, and it must never be zero just
+    because nobody looked.
+    """
+    return db.query(Order).filter(Order.status.in_(CONFIRMABLE)).count()
 
 
 def get_order(db: Session, order_id: str) -> Order | None:

@@ -3,12 +3,15 @@
 Endpoints (see docs/AGENT_CONTRACTS.md §5):
   POST /submit               R: ops/admin
       Accepts BOTH multipart/form-data (file + fields) and JSON (raw_text).
-  GET  /documents            paged; filters: customer_id, source_type      R: ops/admin/finance
+  GET  /documents            paged; filters: customer_id, source_type,     R: ops/admin/finance
+                                   status, pending_first
+  GET  /review-count         → {"pending_review": n} for the nav badge     R: ops/admin/finance
   GET  /documents/{id}       → IntakeDocument (+ job summary embedded)
   GET  /documents/{id}/file  → FileResponse original
   GET  /jobs                 paged; filters: status                             R: ops/admin
   GET  /jobs/{id}            → IntakeJob
   POST /jobs/{id}/retry      → re-queue processing                            R: ops/admin
+  POST /jobs/{id}/promote    → human un-parks a "parked" (not-an-order) job   R: ops/admin
   POST /jobs/{id}/confirm-review → human confirms a needs_review job, creates  R: ops/admin
                                   the draft Order (never auto-run by pipeline)
   GET  /extractions/{job_id} → raw AI output (immutable audit trail)
@@ -45,8 +48,11 @@ from app.services.intake.service import (
     get_extraction_for_job,
     get_job,
     get_job_for_document,
+    count_parked,
+    count_pending_review,
     list_documents,
     list_jobs,
+    promote_parked_job,
     retry_job,
     submit_intake,
 )
@@ -138,16 +144,48 @@ async def submit(
 def list_documents_endpoint(
     customer_id: Optional[str] = Query(default=None),
     source_type: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    pending_first: bool = Query(default=False),
+    # Parked messages are hidden by default; pass true (or status=parked) to
+    # audit what Gate 1 threw away.
+    include_parked: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     _: User = Depends(require_roles("ops", "finance", "admin")),
 ):
     page, page_size = clamp_page(page, page_size)
-    pairs, total = list_documents(db, customer_id=customer_id, source_type=source_type)
+    pairs, total = list_documents(
+        db,
+        customer_id=customer_id,
+        source_type=source_type,
+        status=status,
+        pending_first=pending_first,
+        include_parked=include_parked,
+    )
     start = (page - 1) * page_size
     items = [_doc_out(d, j) for d, j in pairs[start : start + page_size]]
     return page_response(items, total, page, page_size)
+
+
+@router.get("/review-count", response_model=None)
+def pending_review_count_endpoint(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("ops", "finance", "admin")),
+):
+    """How many orders are parked waiting for a human (nav badge / "unread").
+
+    `parked` is returned alongside so the UI can show what Gate 1 discarded —
+    a wrong park is otherwise invisible, and an operator who cannot see the
+    discarded pile cannot check it.
+
+    Declared before `/documents/{id}` so the literal path wins over the
+    path-parameter route.
+    """
+    return {
+        "pending_review": count_pending_review(db),
+        "parked": count_parked(db),
+    }
 
 
 @router.get("/documents/{document_id}", response_model=None)
@@ -186,13 +224,14 @@ def download_document_file(
 @router.get("/jobs", response_model=None)
 def list_jobs_endpoint(
     status_filter: Optional[str] = Query(default=None, alias="status"),
+    include_parked: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     _: User = Depends(require_roles("ops", "admin")),
 ):
     page, page_size = clamp_page(page, page_size)
-    jobs, total = list_jobs(db, status=status_filter)
+    jobs, total = list_jobs(db, status=status_filter, include_parked=include_parked)
     start = (page - 1) * page_size
     items = [_job_out(j) for j in jobs[start : start + page_size]]
     return page_response(items, total, page, page_size)
@@ -223,6 +262,30 @@ def retry_job_endpoint(
     job = retry_job(db, job, actor=actor, background_tasks=background_tasks)
     db.commit()
     return {"job_id": job.id, "status": job.status, "retry_count": job.retry_count}
+
+
+@router.post("/jobs/{job_id}/promote", response_model=None)
+def promote_parked_job_endpoint(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles("ops", "admin")),
+):
+    """A human says a parked message really was an order — process it.
+
+    Gate 1 is a classifier and classifiers are wrong sometimes. Because the
+    original file was stored when the message was parked, this parses it
+    exactly as it would have the first time; nothing is lost by the detour.
+    """
+    job = get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+    try:
+        job = promote_parked_job(db, job, actor=actor, background_tasks=background_tasks)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    db.commit()
+    return {"job_id": job.id, "status": job.status}
 
 
 @router.post("/jobs/{job_id}/confirm-review", response_model=None)

@@ -15,6 +15,7 @@ provenance lives in `document_meta["wecom"]`:
 """
 from __future__ import annotations
 
+import logging
 import mimetypes
 from pathlib import Path
 from typing import Any
@@ -25,10 +26,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.audit import log_audit
+from app.core.config import settings
 from app.models import Customer, IntakeDocument, IntakeJob, User
 from app.services.intake.service import submit_intake
+from app.services.intake.triage import classify_message
 
 # msgtype -> ERP source_type fallback
+logger = logging.getLogger("erp.intake.wecom")
+
 _MSGTYPE_SOURCE = {
     "text": "text",
     "voice": "text",
@@ -183,6 +188,46 @@ def ingest_wecom_message(
         # nothing silently disappears; the pipeline will flag it as failed.
         content = payload.get("content") or "[WeCom attachment could not be retrieved]"
 
+    # --- Gate 1: is this an order at all? ----------------------------------
+    # In "shadow" mode this only records the verdict — every message still
+    # becomes an intake document exactly as before, so the team can inspect
+    # what triage *would* have parked before anything is actually hidden.
+    # "Declared" = the message said it had a file, even if we could not fetch
+    # it. Triage must treat that as an attachment: otherwise a download failure
+    # would leave us with only placeholder text, get classified as chatter and
+    # be parked — losing a real order because our fetch broke.
+    declared_attachment = bool(
+        payload.get("file_url") or payload.get("file_path") or payload.get("file_mime")
+    ) or msgtype in ("image", "file", "video", "mixed")
+
+    verdict = classify_message(
+        text=content,
+        msgtype=msgtype,
+        has_attachment=file_bytes is not None or declared_attachment,
+        filename=filename,
+    )
+    mode = (settings.intake_triage_mode or "shadow").lower()
+    logger.info(
+        "triage msgid=%s decision=%s score=%s tier=%s mode=%s reasons=%s",
+        msgid, verdict.decision, verdict.score, verdict.tier, mode, verdict.reasons,
+    )
+    # Only Tier 0 verdicts are ever parked. Tier 0 is deterministic — empty,
+    # emoji-only, or a message that is nothing but a greeting / ack / system
+    # event — so the odds of a real order hiding in there are negligible.
+    # Tier 1 "not_order" is a heuristic score (a bare product name with no
+    # quantity scores 0) and stays ingested: dropping a real order costs far
+    # more than one extra row in the inbox, which is the same asymmetry that
+    # made "unclear" count as an order in the first place.
+    should_park = (
+        mode == "enforce"
+        and verdict.decision == "not_order"
+        and verdict.tier == "tier0"
+    )
+    if should_park:
+        logger.info(
+            "triage PARKED msgid=%s tier=%s reasons=%s", msgid, verdict.tier, verdict.reasons
+        )
+
     doc, job = submit_intake(
         db,
         customer_id=customer_id,
@@ -193,6 +238,7 @@ def ingest_wecom_message(
         filename=filename,
         actor=actor,
         background_tasks=background_tasks,
+        parked=should_park,
     )
 
     wecom_block: dict[str, Any] = {
@@ -204,6 +250,16 @@ def ingest_wecom_message(
         "received_at": payload.get("received_at"),
         "reply_to_msgid": payload.get("reply_to_msgid"),
         "file_url": payload.get("file_url"),
+        # Gate 1 verdict, so shadow-mode decisions can be audited before
+        # enforcement is switched on. The excerpt makes the report readable
+        # without re-opening every document.
+        "triage": {
+            **verdict.as_dict(),
+            "excerpt": (content or "")[:120],
+            # Lets the report answer "what did we actually park?" rather than
+            # only "what would we have parked?".
+            "parked": should_park,
+        },
     }
 
     reply_to = payload.get("reply_to_msgid")
@@ -234,9 +290,11 @@ def ingest_wecom_message(
         before=None,
         after={"msgid": msgid, "msgtype": msgtype, "customer_id": doc.customer_id},
         summary=(
-            f"WeCom message {msgid} ingested from "
-            f"{payload.get('external_userid') or payload.get('chat_id') or 'unknown'}"
-        ),
+            f"WeCom message {msgid} parked by triage (not an order) from "
+            if should_park
+            else f"WeCom message {msgid} ingested from "
+        )
+        + f"{payload.get('external_userid') or payload.get('chat_id') or 'unknown'}",
     )
 
     return doc, job, False

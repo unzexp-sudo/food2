@@ -1,7 +1,9 @@
 """ORDERS MODULE — owner: orders/procurement agent.
 
 Endpoints (see docs/AGENT_CONTRACTS.md §5):
-  GET    /orders            paged; filters: status, customer_id, delivery_date, q (order_number)
+  GET    /orders            paged; filters: status, statuses (csv), awaiting_first,
+                                   customer_id, delivery_date, q (order_number)
+  GET    /orders/confirm-count → {"awaiting_confirmation": n} for the nav badge
   POST   /orders            manual create
   GET    /orders/{id}       → Order + lines
   PATCH  /orders/{id}/lines bulk replace lines
@@ -44,6 +46,11 @@ router = APIRouter(prefix="/api/v1/orders", tags=["orders"])
 @router.get("", response_model=None)
 def list_orders_endpoint(
     status_filter: str | None = Query(default=None, alias="status"),
+    # Comma-separated list, e.g. "draft,pending_confirmation". Needed because
+    # "still waiting on a human" spans three statuses, not one — a single
+    # `status` value cannot express the confirmation queue.
+    statuses_csv: str | None = Query(default=None, alias="statuses"),
+    awaiting_first: bool = Query(default=False),
     customer_id: str | None = Query(default=None),
     delivery_date: date | None = Query(default=None),
     q: str | None = Query(default=None),
@@ -52,13 +59,18 @@ def list_orders_endpoint(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles("ops", "finance")),
 ):
+    statuses_filter = (
+        [s.strip() for s in statuses_csv.split(",") if s.strip()] if statuses_csv else None
+    )
     page, page_size = clamp_page(page, page_size)
     items, total = svc.list_orders(
         db,
         status=status_filter,
+        statuses=statuses_filter,
         customer_id=customer_id,
         delivery_date=delivery_date,
         q=q,
+        awaiting_first=awaiting_first,
     )
     start = (page - 1) * page_size
     return page_response(items[start : start + page_size], total, page, page_size)
@@ -89,6 +101,21 @@ def create_order_endpoint(
     emit("order.draft_created", db=db, order=order)
     db.commit()
     return svc.serialize_order(db, order)
+
+
+@router.get("/confirm-count", response_model=None)
+def awaiting_confirmation_count_endpoint(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("ops", "finance")),
+):
+    """How many orders are waiting for a person to confirm them.
+
+    The counterpart to `/intake/review-count`: intake counts Gate 1/2 (has a
+    human read the extraction?), this counts Gate 3 (has a human approved the
+    order?). Declared before `/{order_id}` so the literal path wins over the
+    path-parameter route — otherwise "confirm-count" would be parsed as an id.
+    """
+    return {"awaiting_confirmation": svc.count_awaiting_confirmation(db)}
 
 
 # --- Single order -------------------------------------------------------------

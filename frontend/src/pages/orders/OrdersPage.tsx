@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Alert,
   Button,
   Card,
   DatePicker,
@@ -70,6 +71,21 @@ const ORDER_STATUSES = [
   "rejected",
 ];
 
+/**
+ * Mirrors the backend `CONFIRMABLE` set in
+ * `app/services/orders/orders.py` — the statuses a person can still confirm.
+ *
+ * These are the rows nobody has signed off on. Nothing confirms an order on
+ * its own any more, so this set *is* the work queue: keep the two lists in
+ * step or the UI will claim an order is settled when it is not.
+ */
+const AWAITING_HUMAN = ["draft", "pending_confirmation", "needs_clarification"];
+const AWAITING_CSV = AWAITING_HUMAN.join(",");
+
+function isAwaitingHuman(status: string): boolean {
+  return AWAITING_HUMAN.includes(status);
+}
+
 interface NewLine {
   product_id?: string;
   product_display?: string;
@@ -89,18 +105,46 @@ export default function OrdersPage() {
   const [customerFilter, setCustomerFilter] = useState<string | undefined>();
   const [deliveryFilter, setDeliveryFilter] = useState<string | undefined>();
   const [q, setQ] = useState<string>("");
+  // "Unread" view: only the orders still waiting on a person.
+  const [awaitingOnly, setAwaitingOnly] = useState(false);
 
   const params = useMemo(
     () => ({
-      ...(statusFilter ? { status: statusFilter } : {}),
+      // Unconfirmed orders float to the top so the queue is the first thing
+      // an operator sees.
+      awaiting_first: true,
+      // The queue toggle replaces the single-status filter rather than
+      // stacking with it — "status=draft AND statuses=..." would intersect to
+      // whatever overlaps, which silently hides orders.
+      ...(awaitingOnly
+        ? { statuses: AWAITING_CSV }
+        : statusFilter
+          ? { status: statusFilter }
+          : {}),
       ...(customerFilter ? { customer_id: customerFilter } : {}),
       ...(deliveryFilter ? { delivery_date: deliveryFilter } : {}),
       ...(q ? { q } : {}),
     }),
-    [statusFilter, customerFilter, deliveryFilter, q],
+    [statusFilter, customerFilter, deliveryFilter, q, awaitingOnly],
   );
 
   const list = useList<Order>("/orders", params);
+
+  // Badge count for the "waiting for confirmation" banner. Polled: an order
+  // can arrive from WeCom while this tab is open, and nobody should have to
+  // hit reload to find out.
+  const [awaitingCount, setAwaitingCount] = useState<number | null>(null);
+  const refreshAwaitingCount = useCallback(() => {
+    api
+      .get<{ awaiting_confirmation: number }>("/orders/confirm-count")
+      .then((r) => setAwaitingCount(r.awaiting_confirmation))
+      .catch(() => setAwaitingCount(null));
+  }, []);
+  useEffect(() => {
+    refreshAwaitingCount();
+    const id = setInterval(refreshAwaitingCount, 30_000);
+    return () => clearInterval(id);
+  }, [refreshAwaitingCount, list.items]);
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -204,7 +248,10 @@ export default function OrdersPage() {
         allowClear
         placeholder={t("pages.orders.allStatuses")}
         style={{ width: 200 }}
-        value={statusFilter}
+        // The queue toggle already filters by status; leaving this live would
+        // look like it is doing something when it is being ignored.
+        disabled={awaitingOnly}
+        value={awaitingOnly ? undefined : statusFilter}
         onChange={(v) => {
           setStatusFilter(v);
           list.setPage(1);
@@ -255,6 +302,20 @@ export default function OrdersPage() {
         ) : null
       }
     >
+      {awaitingCount ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={t("pages.orders.awaitingBanner", { count: awaitingCount })}
+          description={t("pages.orders.awaitingHint")}
+          action={
+            <Button size="small" onClick={() => setAwaitingOnly((v) => !v)}>
+              {awaitingOnly ? t("pages.intake.showAll") : t("pages.intake.pendingOnly")}
+            </Button>
+          }
+        />
+      ) : null}
       {filterRow}
       <Table<Order>
         rowKey="id"
@@ -262,6 +323,7 @@ export default function OrdersPage() {
         dataSource={list.items}
         columns={columns}
         size="middle"
+        rowClassName={(r: Order) => (isAwaitingHuman(r.status) ? "order-row-awaiting" : "")}
         onRow={(r) => ({ onClick: () => navigate(`/orders/${r.id}`), style: { cursor: "pointer" } })}
         pagination={{
           current: list.page,

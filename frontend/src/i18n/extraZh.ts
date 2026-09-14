@@ -10,6 +10,14 @@ const extraZh = {
     preview: "预览",
   },
   pages: {
+    dashboard: {
+      needsAttention: "待处理事项",
+      waitingReview: "{{count}} 个订单等待审核",
+      waitingConfirm: "{{count}} 个订单等待确认",
+      nothingWaiting: "暂无待处理事项 — 所有订单均已核对。",
+      parkedInfo: "{{count}} 条消息被判定为非订单，已从收件箱隐藏",
+      reviewParked: "查看",
+    },
     sales: {
       quotationPreview: {
         product: "商品",
@@ -45,6 +53,12 @@ const extraZh = {
       },
     },
     orders: {
+      // 第三道关口：订单已生成，但尚未经人工确认。
+      awaitingBanner: "{{count}} 个订单等待确认",
+      awaitingHint: "加粗的行需要人工确认。未经确认的订单不会发送，也不会进入后续处理。",
+      awaitingConfirmTitle: "此订单尚未确认",
+      awaitingConfirmBody: "此后不会自动进行任何处理。请核对下方明细，确认后订单才会流转。",
+      awaitingConfirmNoPermission: "此后不会自动进行任何处理。需要具有运营或管理员权限的人员进行确认。",
       orderTimeline: {
         draft: "订单创建",
         pendingConfirmation: "待确认",
@@ -53,6 +67,24 @@ const extraZh = {
         fulfilled: "已履约",
         invoiced: "已开票",
         needsClarification: "需澄清",
+      },
+    },
+    intake: {
+      pendingBanner: "{{count}} 个订单等待人工审核",
+      pendingOnly: "只看待审核",
+      showAll: "显示全部",
+      unreviewed: "待审核",
+      waitingSince: "自 {{time}} 起等待",
+      reviewHint: "加粗的行仍需人工核对，核对后才会生成订单。",
+      parkedBanner: "{{count}} 条消息被判定为非订单并已归档",
+      parkedOnly: "只看已归档",
+      parkedHint: "这些消息疑似闲聊而非订单，默认不在收件箱显示。如判断有误，请点「恢复」放回处理队列。",
+      promote: "恢复",
+      promoteConfirm: "将该消息放回待处理队列？",
+      promoteSuccess: "已放回处理队列",
+      review: {
+        verifyTitle: "生成订单前请核对",
+        verifyBody: "订单尚未生成。请对照原件核对下方明细，确认后再提交。",
       },
     },
     warehouse: {

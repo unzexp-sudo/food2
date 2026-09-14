@@ -36,6 +36,10 @@ const COLOR_BY_VALUE: Record<string, string> = {
   processing: "processing",
   completed: "success",
   failed: "error",
+  // "unread" — matches the amber used for unreviewed rows / unconfirmed orders
+  needs_review: "warning",
+  // deliberately set aside, not work waiting for anyone
+  parked: "default",
   // po / pick / consolidation / master
   sent: "processing",
   partially_received: "warning",

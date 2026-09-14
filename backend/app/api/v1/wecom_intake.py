@@ -22,11 +22,13 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import require_service_or_roles
 from app.core.pagination import page_response
 from app.models import Customer, CustomerContact, IntakeJob, User
 from app.services.intake.service import _doc_out, _job_out
+from app.services.intake.triage import NOT_ORDER
 from app.services.intake.wecom_intake import ingest_wecom_message, list_wecom_documents
 
 router = APIRouter(prefix="/api/v1/intake", tags=["intake-wecom"])
@@ -169,6 +171,67 @@ def lookup_customer(
             "name_zh": customer.name_zh,
             "contact_phone": customer.contact_phone,
         },
+    }
+
+
+@router.get("/wecom/triage-report")
+def triage_report(
+    limit: int = Query(default=50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _: User | None = Depends(require_service_or_roles("ops", "finance")),
+):
+    """What Gate 1 *would* have parked — the shadow-mode readout.
+
+    While `INTAKE_TRIAGE_MODE=shadow` nothing is hidden; this is how you check
+    the classifier before turning it on. `would_park` is the list to eyeball:
+    if any of those are real orders, the rules need fixing, not the mode.
+    """
+    docs, total = list_wecom_documents(db)
+    counts: dict[str, int] = {}
+    would_park: list[dict[str, Any]] = []
+    unclassified = 0
+    actually_parked = 0
+
+    for d in docs:
+        block = (d.document_meta or {}).get("wecom") or {}
+        verdict = block.get("triage")
+        if not verdict:
+            unclassified += 1
+            continue
+        decision = verdict.get("decision") or "unknown"
+        counts[decision] = counts.get(decision, 0) + 1
+        # A promoted (human-overridden) message is back in the queue, so it is
+        # no longer something enforcement has hidden. Counting it here would
+        # disagree with `GET /intake/review-count`, which counts parked *jobs*
+        # and therefore drops to 0 the moment the job is promoted.
+        if verdict.get("parked") and not verdict.get("overridden"):
+            actually_parked += 1
+        if decision == NOT_ORDER and len(would_park) < limit:
+            would_park.append(
+                {
+                    "document_id": d.id,
+                    "msgid": block.get("msgid"),
+                    "msgtype": block.get("msgtype"),
+                    "created_at": d.created_at.isoformat() if d.created_at else None,
+                    "excerpt": verdict.get("excerpt"),
+                    "score": verdict.get("score"),
+                    "tier": verdict.get("tier"),
+                    "reasons": verdict.get("reasons"),
+                }
+            )
+
+    return {
+        "mode": (settings.intake_triage_mode or "shadow").lower(),
+        "total_wecom_documents": total,
+        "classified": total - unclassified,
+        "unclassified": unclassified,
+        "counts": counts,
+        "would_park_count": counts.get(NOT_ORDER, 0),
+        "would_park": would_park,
+        # What enforcement has currently removed from the inbox. In shadow mode
+        # this is 0 and `would_park_count` is the forecast. Promoted messages
+        # are excluded — they are visible again.
+        "actually_parked_count": actually_parked,
     }
 
 

@@ -1,6 +1,6 @@
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Layout, Menu, Segmented, Tag, Typography, Button, Switch, Spin } from "antd";
+import { Badge, Layout, Menu, Segmented, Tag, Typography, Button, Switch, Spin } from "antd";
 import {
   InboxOutlined,
   FileTextOutlined,
@@ -33,6 +33,7 @@ import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useLanguage, type Lang } from "../i18n";
 import { useThemeMode } from "../theme-context";
 import { parseStoredUser, type CurrentUser, type Role } from "../types";
+import { api } from "../api/client";
 
 const { Header, Sider, Content } = Layout;
 
@@ -155,6 +156,39 @@ export default function AdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [user] = useState<CurrentUser | null>(() => parseStoredUser());
 
+  // The two human gates, shown as unread-style badges on the nav items so
+  // nobody has to open a page — or wait for a push message — to know work
+  // arrived. Intake = "read this order"; Orders = "confirm this order".
+  const [pendingReview, setPendingReview] = useState(0);
+  const [awaitingConfirm, setAwaitingConfirm] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const tick = () => {
+      api
+        .get<{ pending_review: number; parked?: number }>("/intake/review-count")
+        .then((r) => {
+          if (!cancelled) setPendingReview(r.pending_review ?? 0);
+        })
+        .catch(() => {
+          /* badge is cosmetic — never let it break the shell */
+        });
+      api
+        .get<{ awaiting_confirmation: number }>("/orders/confirm-count")
+        .then((r) => {
+          if (!cancelled) setAwaitingConfirm(r.awaiting_confirmation ?? 0);
+        })
+        .catch(() => {
+          /* ditto */
+        });
+    };
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [location.pathname]);
+
   const menuItems = useMemo(() => {
     if (!user) return [];
     return MENU_GROUPS.map((group) => ({
@@ -163,13 +197,34 @@ export default function AdminLayout() {
       label: t(group.labelKey),
       children: group.items
         .filter((item) => item.roles.includes(user.role))
-        .map((item) => ({
-          key: item.key,
-          icon: item.icon,
-          label: t(item.labelKey),
-        })),
+        .map((item) => {
+          const label = t(item.labelKey);
+          // Counts are per-gate and mean exactly one thing: "work waiting".
+          // Parked messages are deliberately NOT added here. A badge that
+          // counts things you cannot action teaches people to ignore badges,
+          // and then a real order stops getting noticed. Parked is surfaced
+          // on the intake page and dashboard instead, clearly labelled.
+          const badgeCount =
+            item.key === "/intake"
+              ? pendingReview
+              : item.key === "/orders"
+                ? awaitingConfirm
+                : 0;
+          return {
+            key: item.key,
+            icon: item.icon,
+            label:
+              badgeCount > 0 ? (
+                <Badge count={badgeCount} size="small" offset={[10, 0]}>
+                  {label}
+                </Badge>
+              ) : (
+                label
+              ),
+          };
+        }),
     })).filter((group) => group.children.length > 0);
-  }, [t, user]);
+  }, [t, user, pendingReview, awaitingConfirm]);
 
   // Highlight the menu item whose route matches (also for detail sub-paths).
   const selectedKey = useMemo(() => {

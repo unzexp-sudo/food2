@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.events import on
 from app.models import (
     Delivery,
@@ -221,6 +222,19 @@ def handle_draft_created(*, db: Session, order: Order, **_: Any) -> None:
     `pending_confirmation` the customer has to confirm it manually.
     """
     try:
+        # When a human must confirm orders, do not pre-empt them by messaging
+        # the customer first. Two reasons: the draft is waiting on *our* ops
+        # team, not on the customer, and a "please confirm" that nothing acts
+        # on is just confusing noise. The customer hears from us once — the
+        # "order confirmed" message, sent after a person has actually approved.
+        if settings.orders_require_human_confirmation:
+            logger.info(
+                "order.draft_created: not messaging the customer for order %s — "
+                "a human confirms orders first",
+                getattr(order, "id", "?"),
+            )
+            return
+
         o = db.get(Order, order.id) if order is not None else None
         if o is None or o.status not in _PENDING_STATUSES:
             return
@@ -276,6 +290,56 @@ def handle_intake_job_failed(
     except Exception:  # noqa: BLE001
         logger.exception(
             "intake.job_failed notification failed for job %s",
+            getattr(job, "id", "?"),
+        )
+
+
+@on("intake.needs_review")
+def handle_intake_needs_review(
+    *, db: Session, job: IntakeJob, document: IntakeDocument | None = None, **_: Any
+) -> None:
+    """Ping the ops group that an order is parked waiting for a human check.
+
+    Every extraction stops for review (settings.intake_require_human_review),
+    so without this the queue fills up silently and orders sit unprocessed.
+    The in-app review list remains the source of truth — this is only the
+    tap on the shoulder.
+    """
+    try:
+        chat_id = (settings.wecom_ops_chat_id or "").strip()
+        if not chat_id:
+            # Not configured: log it. The order is still queued for review, it
+            # just is not announced in WeCom.
+            logger.info(
+                "intake.needs_review for job %s — no WECOM_OPS_CHAT_ID set, skipping push",
+                getattr(job, "id", "?"),
+            )
+            return
+
+        j = db.get(IntakeJob, job.id) if job is not None else None
+        if j is None:
+            return
+
+        doc = document
+        if doc is None and j.document_id:
+            doc = db.get(IntakeDocument, j.document_id)
+
+        notify(
+            db,
+            template="intake_needs_review",
+            customer_id=None,
+            chat_id=chat_id,
+            payload={
+                "job_id": j.id,
+                "document_id": getattr(doc, "id", None),
+                "filename": getattr(doc, "original_filename", None),
+                "source_type": getattr(doc, "source_type", None),
+            },
+            locale="zh",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "intake.needs_review notification failed for job %s",
             getattr(job, "id", "?"),
         )
 

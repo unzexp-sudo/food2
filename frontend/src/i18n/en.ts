@@ -118,6 +118,7 @@ const en = {
       completed: "Completed",
       failed: "Failed",
       needs_review: "Needs review",
+      parked: "Parked",
     },
     pick: {
       open: "Open",

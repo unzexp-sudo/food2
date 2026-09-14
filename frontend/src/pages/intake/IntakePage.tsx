@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Alert,
+  Badge,
   Button,
   Card,
   DatePicker,
@@ -23,6 +24,7 @@ import {
   EyeOutlined,
   FileOutlined,
   ReloadOutlined,
+  RollbackOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
 import { type Dayjs } from "dayjs";
@@ -64,8 +66,17 @@ interface IntakeJob {
   created_at: string;
   finished_at: string | null;
 }
+/**
+ * `GET /intake/documents` flattens the latest job onto the document
+ * (`job_id`, `job_status`, `draft_order_id`) — it does NOT nest a `job`
+ * object. Reading a nested `job` here silently rendered "—" for the status
+ * and draft-order columns and hid the review button entirely, so the queue
+ * looked empty even while orders were parked.
+ */
 interface IntakeDocWithJob extends IntakeDocument {
-  job?: IntakeJob;
+  job_id: string | null;
+  job_status: string | null;
+  draft_order_id: string | null;
   customer_name_en?: string | null;
   customer_name_zh?: string | null;
 }
@@ -86,17 +97,51 @@ export default function IntakePage() {
   const [customerFilter, setCustomerFilter] = useState<string | undefined>();
   const [sourceFilter, setSourceFilter] = useState<string | undefined>();
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
+  // "Unread" view: only the orders still parked for a human.
+  const [pendingOnly, setPendingOnly] = useState(false);
+  // "Parked" view: messages the parser set aside as definitely-not-an-order.
+  // Hidden from the inbox by default, so this toggle is the only way in.
+  const [parkedOnly, setParkedOnly] = useState(false);
 
   const params = useMemo(
     () => ({
+      // Unreviewed orders float to the top so the queue is the first thing
+      // a reviewer sees.
+      pending_first: true,
       ...(customerFilter ? { customer_id: customerFilter } : {}),
       ...(sourceFilter ? { source_type: sourceFilter } : {}),
       ...(statusFilter ? { status: statusFilter } : {}),
+      ...(pendingOnly ? { status: "needs_review" } : {}),
+      ...(parkedOnly ? { status: "parked" } : {}),
     }),
-    [customerFilter, sourceFilter, statusFilter],
+    [customerFilter, sourceFilter, statusFilter, pendingOnly, parkedOnly],
   );
 
   const list = useList<IntakeDocWithJob>("/intake/documents", params);
+
+  // Badge count for the "waiting for review" banner. Polled: an order can
+  // land from WeCom while this tab is open, and nobody should have to hit
+  // reload to find out. `parked` is polled alongside it for the same reason —
+  // a wrongly-parked message is an invisible lost order.
+  const [pendingCount, setPendingCount] = useState<number | null>(null);
+  const [parkedCount, setParkedCount] = useState<number | null>(null);
+  const refreshPendingCount = useCallback(() => {
+    api
+      .get<{ pending_review: number; parked?: number }>("/intake/review-count")
+      .then((r) => {
+        setPendingCount(r.pending_review);
+        setParkedCount(r.parked ?? 0);
+      })
+      .catch(() => {
+        setPendingCount(null);
+        setParkedCount(null);
+      });
+  }, []);
+  useEffect(() => {
+    refreshPendingCount();
+    const id = setInterval(refreshPendingCount, 30_000);
+    return () => clearInterval(id);
+  }, [refreshPendingCount, list.items]);
 
   // Master data for filters + form selects.
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -234,6 +279,17 @@ export default function IntakePage() {
     });
   };
 
+  // Un-park: put a message the parser set aside back into the queue.
+  const handlePromote = async (jobId: string) => {
+    await run(() => api.post(`/intake/jobs/${jobId}/promote`), {
+      success: t("pages.intake.promoteSuccess"),
+      onSuccess: () => {
+        list.refresh();
+        refreshPendingCount();
+      },
+    });
+  };
+
   const handleDownload = async (docId: string) => {
     try {
       const res = await client.get(`/intake/documents/${docId}/file`, { responseType: "blob" });
@@ -320,15 +376,22 @@ export default function IntakePage() {
       key: "job_status",
       width: 130,
       render: (_: unknown, r: IntakeDocWithJob) =>
-        r.job ? <StatusTag domain="intake" value={r.job.status} /> : "—",
+        r.job_status ? (
+          <Space size={4}>
+            <StatusTag domain="intake" value={r.job_status} />
+            {r.job_status === "needs_review" && <Badge status="processing" />}
+          </Space>
+        ) : (
+          "—"
+        ),
     },
     {
       title: t("pages.intake.colDraftOrder"),
       key: "draft_order",
       width: 150,
       render: (_: unknown, r: IntakeDocWithJob) =>
-        r.job?.draft_order_id ? (
-          <Link to={`/orders/${r.job.draft_order_id}`}>{t("pages.intake.viewDraftOrder")}</Link>
+        r.draft_order_id ? (
+          <Link to={`/orders/${r.draft_order_id}`}>{t("pages.intake.viewDraftOrder")}</Link>
         ) : (
           "—"
         ),
@@ -345,28 +408,39 @@ export default function IntakePage() {
             onClick={() => handleDownload(r.id)}
             title={t("pages.intake.downloadOriginal")}
           />
-          {r.job && (
+          {r.job_id && r.job_status !== "parked" && (
             <Button
               size="small"
               icon={<EyeOutlined />}
-              onClick={() => handleViewExtraction(r.job!.id)}
+              onClick={() => handleViewExtraction(r.job_id!)}
               title={t("pages.intake.viewExtraction")}
             />
           )}
-          {canMutate && r.job?.status === "needs_review" && (
+          {canMutate && r.job_status === "needs_review" && (
             <Button
               size="small"
               type="primary"
               icon={<EyeOutlined />}
-              onClick={() => openReview(r.job!.id, r.file_url)}
+              onClick={() => openReview(r.job_id!, r.file_url)}
             >
               {t("pages.intake.review.title")}
             </Button>
           )}
-          {canMutate && r.job && (r.job.status === "failed" || r.job.status === "completed") && (
+          {canMutate && r.job_status === "parked" && r.job_id && (
+            <Popconfirm
+              title={t("pages.intake.promoteConfirm")}
+              onConfirm={() => handlePromote(r.job_id!)}
+              disabled={mutateLoading}
+            >
+              <Button size="small" icon={<RollbackOutlined />} loading={mutateLoading}>
+                {t("pages.intake.promote")}
+              </Button>
+            </Popconfirm>
+          )}
+          {canMutate && (r.job_status === "failed" || r.job_status === "completed") && (
             <Popconfirm
               title={t("pages.intake.retryConfirm")}
-              onConfirm={() => handleRetry(r.job!.id)}
+              onConfirm={() => handleRetry(r.job_id!)}
               disabled={mutateLoading}
             >
               <Button size="small" icon={<ReloadOutlined />} loading={mutateLoading}>
@@ -415,7 +489,7 @@ export default function IntakePage() {
           setStatusFilter(v);
           list.setPage(1);
         }}
-        options={["queued", "processing", "completed", "failed", "needs_review"].map((s) => ({
+        options={["queued", "processing", "completed", "failed", "needs_review", "parked"].map((s) => ({
           value: s,
           label: t(`status.intake.${s}`),
         }))}
@@ -434,6 +508,46 @@ export default function IntakePage() {
         ) : null
       }
     >
+      {pendingCount ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={t("pages.intake.pendingBanner", { count: pendingCount })}
+          description={t("pages.intake.reviewHint")}
+          action={
+            <Button
+              size="small"
+              onClick={() => {
+                setPendingOnly((v) => !v);
+                setParkedOnly(false);
+              }}
+            >
+              {pendingOnly ? t("pages.intake.showAll") : t("pages.intake.pendingOnly")}
+            </Button>
+          }
+        />
+      ) : null}
+      {parkedCount ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={t("pages.intake.parkedBanner", { count: parkedCount })}
+          description={t("pages.intake.parkedHint")}
+          action={
+            <Button
+              size="small"
+              onClick={() => {
+                setParkedOnly((v) => !v);
+                setPendingOnly(false);
+              }}
+            >
+              {parkedOnly ? t("pages.intake.showAll") : t("pages.intake.parkedOnly")}
+            </Button>
+          }
+        />
+      ) : null}
       {filterRow}
       <Table<IntakeDocWithJob>
         rowKey="id"
@@ -441,6 +555,9 @@ export default function IntakePage() {
         dataSource={list.items}
         columns={columns}
         size="middle"
+        rowClassName={(r: IntakeDocWithJob) =>
+          r.job_status === "needs_review" ? "intake-row-unreviewed" : ""
+        }
         pagination={{
           current: list.page,
           pageSize: list.pageSize,
@@ -587,7 +704,10 @@ export default function IntakePage() {
         fileUrl={reviewFileUrl}
         canConfirm={canMutate}
         onClose={() => setReviewOpen(false)}
-        onConfirmed={() => list.refresh()}
+        onConfirmed={() => {
+          list.refresh();
+          refreshPendingCount();
+        }}
       />
     </Card>
   );
