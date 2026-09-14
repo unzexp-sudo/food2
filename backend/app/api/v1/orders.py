@@ -25,6 +25,7 @@ from app.core.deps import require_roles
 from app.core.events import emit
 from app.core.pagination import clamp_page, page_response
 from app.models import User
+from app.schemas.identity import DeliveryConfirm
 from app.schemas.orders import (
     OrderClarification,
     OrderConfirm,
@@ -157,6 +158,36 @@ def replace_lines_endpoint(
 
 
 # --- Confirm / reject / clarification / resubmit ------------------------------
+
+@router.post("/{order_id}/confirm-delivery", response_model=None)
+def confirm_delivery_endpoint(
+    order_id: str,
+    payload: DeliveryConfirm,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles("ops", "admin")),
+):
+    """A person confirms where this order is going.
+
+    The order may already carry an address pre-filled from the customer — that
+    is a proposal for this screen to show, not a decision. Only this endpoint
+    sets `delivery_confirmed_at`, and without it the order cannot be confirmed.
+    """
+    order = svc.get_order(db, order_id)
+    if order is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Order not found")
+    try:
+        order = svc.confirm_delivery(
+            db, order,
+            delivery_address=payload.delivery_address,
+            contact_name=payload.contact_name,
+            contact_phone=payload.contact_phone,
+            actor=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    db.commit()
+    return svc.serialize_order(db, order)
+
 
 @router.post("/{order_id}/confirm", response_model=None)
 def confirm_order_endpoint(

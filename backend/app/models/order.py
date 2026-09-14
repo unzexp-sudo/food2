@@ -30,6 +30,21 @@ class Order(TimestampMixin):
     created_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
     notes: Mapped[str | None] = mapped_column(Text)
 
+    # --- Delivery confirmation ---------------------------------------------
+    # The address this order is actually going to. It may be pre-filled from
+    # `Customer.address` — which is a proposal, not a fact — so it is stored on
+    # the order (a delivery is per-order, and the customer row can change
+    # later) and must be confirmed by a person before the order can be
+    # confirmed. `delivery_confirmed_at` is the gate; the three fields above it
+    # are only the content of that confirmation.
+    delivery_address: Mapped[str | None] = mapped_column(Text)
+    delivery_contact_name: Mapped[str | None] = mapped_column(String(100))
+    delivery_contact_phone: Mapped[str | None] = mapped_column(String(50))
+    delivery_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    delivery_confirmed_by: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id")
+    )
+
     lines: Mapped[list["OrderLine"]] = relationship(
         back_populates="order", cascade="all, delete-orphan", order_by="OrderLine.line_no"
     )

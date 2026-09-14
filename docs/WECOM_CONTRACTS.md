@@ -250,6 +250,16 @@ Auth (either):
 Headers: `Idempotency-Key: <msgid>` (the gateway also sends `msgid` in the body;
 either is sufficient).
 
+**Display-only identity hints** (added 2026-09-14, see
+`docs/CUSTOMER_MATCHING_PLAN.md`): the gateway also sends `contact_name`,
+`contact_alias` and `corp_name` when it holds them for the contact. The ERP
+cannot look these up — `wecom_contacts` lives in the gateway and an
+`external_userid` is opaque to a person — and without them the "unbound chats"
+bind queue would ask a human to identify a conversation from an unreadable id.
+They are **user-editable, are stored as evidence only, and must never be used
+to resolve a customer**. Resolution happens solely on a human-confirmed binding
+in `customer_identities`.
+
 ```json
 {
   "msgid": "wmAbCdEf123",
@@ -257,6 +267,9 @@ either is sufficient).
   "chat_id": "wrChatId...",
   "sender_userid": "ZhangSan",
   "customer_id": "<erp customer id or null>",
+  "contact_name": "陈师傅 (食堂)",
+  "contact_alias": "佛山市政府饭堂",
+  "corp_name": "佛山市政府",
   "msgtype": "text",
   "content": "明天要 20斤 土豆 ...",
   "file_url": null,

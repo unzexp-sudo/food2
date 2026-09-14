@@ -28,6 +28,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.core.audit import log_audit
 from app.core.config import settings
 from app.models import Customer, IntakeDocument, IntakeJob, User
+from app.services.identity import resolve_for_document
 from app.services.intake.service import submit_intake
 from app.services.intake.triage import classify_message
 
@@ -138,6 +139,38 @@ def _set_meta(db: Session, doc: IntakeDocument, extra: dict) -> None:
     doc.document_meta = meta
     flag_modified(doc, "document_meta")
     db.flush()
+
+
+def _resolve_identity(db: Session, doc: IntakeDocument, payload: dict[str, Any]) -> dict:
+    """§2.1 — resolve the conversation to a customer, or hold the document.
+
+    A WeCom chat has no key in common with an ERP customer until a human makes
+    one, so: a confirmed binding wins; otherwise an explicit customer asserted
+    upstream is carried (it is an upstream human decision, not an inference);
+    otherwise the document is `unbound` and cannot become an order.
+    """
+    block = resolve_for_document(
+        db,
+        doc,
+        external_userid=payload.get("external_userid"),
+        chat_id=payload.get("chat_id"),
+        upstream_customer_id=payload.get("customer_id"),
+    )
+    if block.get("status") == "bound" and block.get("customer_id"):
+        # An ERP binding outranks the gateway: the ERP owns the ledger and
+        # "one conversation, one customer" is enforced here.
+        doc.customer_id = block["customer_id"]
+        db.flush()
+    # What the bind screen shows the human. Never used to resolve anything —
+    # a display name is user-editable and is not evidence of identity.
+    block["display_name"] = (
+        payload.get("display_name")
+        or payload.get("contact_name")
+        or payload.get("name")
+    )
+    block["corp_name"] = payload.get("corp_name")
+    block["alias"] = payload.get("contact_alias")
+    return block
 
 
 def ingest_wecom_message(
@@ -279,7 +312,18 @@ def ingest_wecom_message(
                 doc.customer_id = parent.customer_id
                 db.flush()
 
-    _set_meta(db, doc, {"wecom": wecom_block})
+    # Resolve AFTER the parent-inheritance above, so `doc.customer_id` is final
+    # and a reply that inherited its parent's customer is not held for nothing.
+    identity_block = _resolve_identity(db, doc, payload)
+
+    _set_meta(db, doc, {"wecom": wecom_block, "identity": identity_block})
+
+    if identity_block.get("status") == "unbound":
+        logger.info(
+            "identity UNBOUND msgid=%s chat_key=%s — document held, it cannot "
+            "become an order until a human binds the conversation",
+            msgid, identity_block.get("chat_key"),
+        )
 
     log_audit(
         db,

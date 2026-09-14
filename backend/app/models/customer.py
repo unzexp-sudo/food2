@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import TimestampMixin, UUIDMixin
@@ -19,6 +21,18 @@ class Customer(TimestampMixin):
     delivery_zone: Mapped[str | None] = mapped_column(String(100))
     notes: Mapped[str | None] = mapped_column(String(1000))
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+
+    # --- Delivery address confirmation -------------------------------------
+    # `address` above is only a field somebody typed; these three record that a
+    # person checked it against reality. An order may be pre-filled FROM
+    # `address`, but pre-filling is not confirming — that is exactly why the
+    # timestamp is separate from the value.
+    address_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    address_confirmed_by: Mapped[str | None] = mapped_column(String(36))
+    # How the address reached us: manual | pdf_extract | ocr_extract | wecom.
+    # Extraction may propose a value; only a human confirming it sets the
+    # timestamp above, so the source never becomes a claim of correctness.
+    address_source: Mapped[str | None] = mapped_column(String(30))
 
     contacts: Mapped[list["CustomerContact"]] = relationship(
         back_populates="customer", cascade="all, delete-orphan"

@@ -26,6 +26,7 @@ import {
   WechatOutlined,
   MessageOutlined,
   NotificationOutlined,
+  SafetyCertificateOutlined,
   SunOutlined,
   MoonOutlined,
 } from "@ant-design/icons";
@@ -120,6 +121,11 @@ const MENU_GROUPS: MenuGroupDef[] = [
       { key: "/wecom/messages", labelKey: "nav.wecomMessages", icon: <MessageOutlined />, roles: ["admin", "ops"] },
       { key: "/wecom/contacts", labelKey: "nav.wecomContacts", icon: <WechatOutlined />, roles: ["admin", "ops"] },
       { key: "/wecom/outbound", labelKey: "nav.wecomOutbound", icon: <NotificationOutlined />, roles: ["admin", "ops"] },
+      // Gate 0 — a conversation nobody has told the system which customer it
+      // belongs to. It sits with the WeCom items because that is where the
+      // question comes from, and it is badged because until it is answered
+      // every order in that chat is held.
+      { key: "/identity/chats", labelKey: "pages.identity.navLabel", icon: <SafetyCertificateOutlined />, roles: ["admin", "ops"] },
     ],
   },
 ];
@@ -156,11 +162,13 @@ export default function AdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [user] = useState<CurrentUser | null>(() => parseStoredUser());
 
-  // The two human gates, shown as unread-style badges on the nav items so
+  // The three human gates, shown as unread-style badges on the nav items so
   // nobody has to open a page — or wait for a push message — to know work
-  // arrived. Intake = "read this order"; Orders = "confirm this order".
+  // arrived. Intake = "read this order"; Orders = "confirm this order";
+  // Unbound chats = "say which customer this conversation is".
   const [pendingReview, setPendingReview] = useState(0);
   const [awaitingConfirm, setAwaitingConfirm] = useState(0);
+  const [unboundChats, setUnboundChats] = useState(0);
   useEffect(() => {
     let cancelled = false;
     const tick = () => {
@@ -176,6 +184,14 @@ export default function AdminLayout() {
         .get<{ awaiting_confirmation: number }>("/orders/confirm-count")
         .then((r) => {
           if (!cancelled) setAwaitingConfirm(r.awaiting_confirmation ?? 0);
+        })
+        .catch(() => {
+          /* ditto */
+        });
+      api
+        .get<{ items: unknown[]; total: number }>("/identity/unbound")
+        .then((r) => {
+          if (!cancelled) setUnboundChats(r.total ?? 0);
         })
         .catch(() => {
           /* ditto */
@@ -209,7 +225,9 @@ export default function AdminLayout() {
               ? pendingReview
               : item.key === "/orders"
                 ? awaitingConfirm
-                : 0;
+                : item.key === "/identity/chats"
+                  ? unboundChats
+                  : 0;
           return {
             key: item.key,
             icon: item.icon,
@@ -224,7 +242,7 @@ export default function AdminLayout() {
           };
         }),
     })).filter((group) => group.children.length > 0);
-  }, [t, user, pendingReview, awaitingConfirm]);
+  }, [t, user, pendingReview, awaitingConfirm, unboundChats]);
 
   // Highlight the menu item whose route matches (also for detail sub-paths).
   const selectedKey = useMemo(() => {

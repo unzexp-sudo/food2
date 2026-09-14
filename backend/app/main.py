@@ -22,6 +22,7 @@ from app.api.v1 import (
     customers,
     delivery,
     finance,
+    identity,
     intake,
     orders,
     procurement,
@@ -92,8 +93,8 @@ app.add_middleware(
 
 for module in (
     auth, system, customers, catalog, wholesalers, contracts,
-    intake, orders, procurement, quotations, warehouse, delivery, finance,
-    wecom_intake,
+    identity, intake, orders, procurement, quotations, warehouse, delivery,
+    finance, wecom_intake,
 ):
     app.include_router(module.router)
 

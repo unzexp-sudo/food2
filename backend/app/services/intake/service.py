@@ -25,6 +25,7 @@ from app.models import (
     IntakeJob,
     User,
 )
+from app.services.intake.company_proposal import build_company_proposal
 
 
 # --- Helpers ------------------------------------------------------------------
@@ -157,6 +158,17 @@ def submit_intake(
         meta["raw_text"] = raw_text
     if delivery_date:
         meta["delivery_date"] = delivery_date.isoformat()
+
+    # Company pre-fill (§2.2): a proposal for the bind screen, nothing more.
+    # It is stored next to the document, never on `customers`.
+    proposal = build_company_proposal(
+        raw_text=raw_text,
+        source_type=source_type,
+        file_path=file_path,
+        filename=original_filename,
+    )
+    if proposal is not None:
+        meta["company_proposal"] = proposal
 
     doc = IntakeDocument(
         customer_id=customer_id,

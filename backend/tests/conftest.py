@@ -139,3 +139,30 @@ def require_human_confirmation(monkeypatch):
             ...  # order stays "draft" until POST /orders/{id}/confirm
     """
     monkeypatch.setattr(settings, "orders_require_human_confirmation", True)
+
+
+@pytest.fixture(autouse=True)
+def _legacy_delivery_gate(monkeypatch):
+    """Keep pre-existing order tests off the delivery-confirmation gate.
+
+    Production refuses to confirm an order until a person has confirmed where
+    it is going (`settings.require_delivery_confirmation`, default True). Most
+    of this suite is about lines, pricing, lineage and consolidation — it needs
+    confirmed orders to exist, not an extra confirm-delivery step in every
+    test.
+
+    Tests that DO exercise the rule request `require_delivery_confirmation`.
+    """
+    monkeypatch.setattr(settings, "require_delivery_confirmation", False)
+
+
+@pytest.fixture
+def require_delivery_confirmation(monkeypatch):
+    """Opt into the production rule: no order without a confirmed destination.
+
+    Usage:
+        def test_no_order_without_a_destination(client, admin_headers,
+                                                require_delivery_confirmation):
+            ...  # POST /orders/{id}/confirm → 409 until confirm-delivery runs
+    """
+    monkeypatch.setattr(settings, "require_delivery_confirmation", True)

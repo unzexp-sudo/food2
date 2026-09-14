@@ -33,6 +33,8 @@ const DashboardPage = lazy(() => import("./pages/dashboard/DashboardPage"));
 const WeComMessagesPage = lazy(() => import("./pages/wecom/WeComMessagesPage"));
 const WeComContactsPage = lazy(() => import("./pages/wecom/WeComContactsPage"));
 const WeComOutboundPage = lazy(() => import("./pages/wecom/WeComOutboundPage"));
+const UnboundChatsPage = lazy(() => import("./pages/identity/UnboundChatsPage"));
+const BindChatPage = lazy(() => import("./pages/identity/BindChatPage"));
 
 /** Redirects unauthenticated visitors to /login. Wrap around the admin layout. */
 export function AuthGuard({ children }: { children: ReactNode }) {
@@ -85,6 +87,11 @@ export function AppRoutes() {
             <Route path="/wecom/messages" element={<WeComMessagesPage />} />
             <Route path="/wecom/contacts" element={<WeComContactsPage />} />
             <Route path="/wecom/outbound" element={<WeComOutboundPage />} />
+            {/* Gate 0: a conversation with no customer yet. Declared before
+                the wildcard so an unbound chat never silently lands on the
+                intake inbox. */}
+            <Route path="/identity/chats" element={<UnboundChatsPage />} />
+            <Route path="/identity/chats/bind" element={<BindChatPage />} />
             <Route path="*" element={<Navigate to="/intake" replace />} />
           </Route>
         </Route>

@@ -12,6 +12,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_audit
+from app.core.config import settings
 from app.core.numbers import next_number
 from app.models import (
     ContractPrice,
@@ -93,6 +94,13 @@ def _order_out(db: Session, o: Order, *, include_lines: bool = True) -> dict:
         "confirmed_by": o.confirmed_by,
         "confirmed_at": o.confirmed_at.isoformat() if o.confirmed_at else None,
         "notes": o.notes,
+        "delivery_address": o.delivery_address,
+        "delivery_contact_name": o.delivery_contact_name,
+        "delivery_contact_phone": o.delivery_contact_phone,
+        "delivery_confirmed_at": (
+            o.delivery_confirmed_at.isoformat() if o.delivery_confirmed_at else None
+        ),
+        "delivery_confirmed_by": o.delivery_confirmed_by,
         "line_count": len(lines_out) if include_lines else _count_lines(db, o.id),
         "created_at": o.created_at.isoformat() if o.created_at else None,
         "lines": lines_out,
@@ -199,6 +207,9 @@ def create_order(
     )
     db.add(order)
     db.flush()
+
+    # Pre-fill, never confirm — see `prefill_delivery_from_customer`.
+    prefill_delivery_from_customer(db, order)
 
     for idx, ln in enumerate(lines, start=1):
         prod = products.get(ln.get("product_id")) if ln.get("product_id") else None
@@ -363,6 +374,100 @@ def lock_contract_prices(db: Session, order: Order) -> int:
     return updated
 
 
+# --- Delivery confirmation ----------------------------------------------------
+
+def prefill_delivery_from_customer(db: Session, order: Order) -> Order:
+    """Copy the customer's address onto the order as a *proposal*.
+
+    A customer row can carry an address for years without anyone checking it,
+    so copying it is a convenience for the person confirming, never a
+    confirmation. `delivery_confirmed_at` stays None, which is what the gate
+    reads. Existing values are left alone — a human may already have typed a
+    better one.
+    """
+    if order.delivery_address:
+        return order
+    customer = db.get(Customer, order.customer_id)
+    if customer is None:
+        return order
+    changed = False
+    if customer.address:
+        order.delivery_address = customer.address
+        changed = True
+    if not order.delivery_contact_name and customer.contact_name:
+        order.delivery_contact_name = customer.contact_name
+        changed = True
+    if not order.delivery_contact_phone and customer.contact_phone:
+        order.delivery_contact_phone = customer.contact_phone
+        changed = True
+    if changed:
+        db.flush()
+    return order
+
+
+def assert_delivery_confirmed(order: Order) -> None:
+    """Refuse to settle an order whose destination nobody has confirmed.
+
+    Pre-filling `delivery_address` is not confirming it — that is the whole
+    reason the timestamp is a separate field. An order confirmed with the wrong
+    address is a truck at the wrong gate, which is far worse than one more
+    click.
+    """
+    if settings.require_delivery_confirmation and order.delivery_confirmed_at is None:
+        raise ValueError(
+            "Delivery is not confirmed yet — POST /orders/"
+            f"{order.id}/confirm-delivery first. A pre-filled address is a "
+            "proposal, not a confirmation."
+        )
+
+
+def confirm_delivery(
+    db: Session,
+    order: Order,
+    *,
+    delivery_address: str | None = None,
+    contact_name: str | None = None,
+    contact_phone: str | None = None,
+    actor: User | None = None,
+) -> Order:
+    """A person confirms where this order is going and who receives it."""
+    before = {
+        "delivery_address": order.delivery_address,
+        "delivery_confirmed_at": (
+            order.delivery_confirmed_at.isoformat()
+            if order.delivery_confirmed_at else None
+        ),
+    }
+    if delivery_address:
+        order.delivery_address = delivery_address
+    if contact_name is not None:
+        order.delivery_contact_name = contact_name
+    if contact_phone is not None:
+        order.delivery_contact_phone = contact_phone
+    if not order.delivery_address:
+        raise ValueError(
+            "delivery_address is required — an order cannot be confirmed "
+            "without a destination"
+        )
+    now = datetime.now(timezone.utc)
+    order.delivery_confirmed_at = now
+    order.delivery_confirmed_by = actor.id if actor else None
+    db.flush()
+    log_audit(
+        db, actor, "Order", order.id, "confirm_delivery",
+        before=before,
+        after={
+            "delivery_address": order.delivery_address,
+            "delivery_contact_name": order.delivery_contact_name,
+            "delivery_contact_phone": order.delivery_contact_phone,
+            "delivery_confirmed_at": now.isoformat(),
+            "delivery_confirmed_by": order.delivery_confirmed_by,
+        },
+        summary=f"Delivery confirmed for order {order.order_number}",
+    )
+    return order
+
+
 # --- Confirm / reject / clarification / resubmit ------------------------------
 
 def confirm_order(
@@ -374,6 +479,7 @@ def confirm_order(
 ) -> Order:
     if order.status not in CONFIRMABLE:
         raise ValueError(f"Cannot confirm order in status '{order.status}'")
+    assert_delivery_confirmed(order)
     before = {"status": order.status, "confirmed_by": order.confirmed_by}
     lock_contract_prices(db, order)
     order.status = "confirmed"

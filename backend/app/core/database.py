@@ -64,3 +64,12 @@ def init_db() -> None:
     # Additive columns introduced after the initial schema.
     _add_column_if_missing("inventory_movements", "created_at", "DATETIME")
     _add_column_if_missing("inventory_movements", "updated_at", "DATETIME")
+    # Delivery confirmation (docs/IDENTITY_IMPLEMENTATION_SPEC.md §1.2).
+    _add_column_if_missing("customers", "address_confirmed_at", "DATETIME")
+    _add_column_if_missing("customers", "address_confirmed_by", "VARCHAR(36)")
+    _add_column_if_missing("customers", "address_source", "VARCHAR(30)")
+    _add_column_if_missing("orders", "delivery_address", "TEXT")
+    _add_column_if_missing("orders", "delivery_contact_name", "VARCHAR(100)")
+    _add_column_if_missing("orders", "delivery_contact_phone", "VARCHAR(50)")
+    _add_column_if_missing("orders", "delivery_confirmed_at", "DATETIME")
+    _add_column_if_missing("orders", "delivery_confirmed_by", "VARCHAR(36)")

@@ -87,6 +87,15 @@ class Settings(BaseSettings):
     # restore confidence-based auto-confirmation.
     orders_require_human_confirmation: bool = True
 
+    # HARD RULE: no order is confirmed without a person confirming WHERE it is
+    # going. A customer row can carry an address for years without anyone ever
+    # checking it, and an order inherits that string silently — the wrong
+    # address on a confirmed order is a truck at the wrong gate. Pre-filling
+    # `delivery_address` from the customer is a proposal; it is not a
+    # confirmation, and it must never satisfy this gate. Set to False only to
+    # restore confirming an order with no delivery confirmation at all.
+    require_delivery_confirmation: bool = True
+
     # Gate 1: keep non-orders ("你好", "收到", "谢谢") out of the intake inbox.
     #   "off"     — no classification at all, behave exactly as before
     #   "shadow"  — classify and record the verdict, change NO behaviour

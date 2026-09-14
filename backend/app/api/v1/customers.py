@@ -7,6 +7,8 @@ Endpoints (see docs/AGENT_CONTRACTS.md §5):
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -23,6 +25,7 @@ from app.schemas.customers import (
     CustomerOut,
     CustomerUpdate,
 )
+from app.schemas.identity import AddressVerify
 from app.services.masterdata.customers import (
     create_contact,
     create_customer,
@@ -173,6 +176,68 @@ def delete_customer_endpoint(
     soft_delete_customer(db, customer, actor=actor)
     db.commit()
     return _customer_out(customer)
+
+
+# --- Address verification -----------------------------------------------------
+
+@router.post("/{customer_id}/verify-address", response_model=None)
+def verify_address_endpoint(
+    customer_id: str,
+    payload: AddressVerify,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles("ops", "admin")),
+):
+    """A person checked this address against reality. Record it.
+
+    Until this is called, `Customer.address` is just a string somebody typed —
+    possibly years ago, possibly from an extraction. Orders may be pre-filled
+    from it, but pre-filling is not confirming, which is exactly why the
+    timestamp lives here rather than on the address column.
+    """
+    from app.core.audit import log_audit
+
+    customer = get_customer(db, customer_id)
+    if customer is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Customer not found")
+
+    before = {
+        "address": customer.address,
+        "address_confirmed_at": (
+            customer.address_confirmed_at.isoformat()
+            if customer.address_confirmed_at else None
+        ),
+    }
+    customer.address = payload.address
+    if payload.contact_name is not None:
+        customer.contact_name = payload.contact_name
+    if payload.contact_phone is not None:
+        customer.contact_phone = payload.contact_phone
+    if payload.delivery_zone is not None:
+        customer.delivery_zone = payload.delivery_zone
+    now = datetime.now(timezone.utc)
+    customer.address_confirmed_at = now
+    customer.address_confirmed_by = actor.id
+    customer.address_source = "manual"
+    db.flush()
+
+    log_audit(
+        db, actor, "Customer", customer.id, "verify_address",
+        before=before,
+        after={
+            "address": customer.address,
+            "address_confirmed_at": now.isoformat(),
+            "address_confirmed_by": actor.id,
+            "address_source": customer.address_source,
+        },
+        summary=f"Delivery address verified for customer {customer.code}",
+    )
+    db.commit()
+    return {
+        **_customer_out(customer),
+        "address_confirmed_at": now.isoformat(),
+        "address_confirmed_by": actor.id,
+        "address_source": customer.address_source,
+    }
 
 
 # --- Contacts -----------------------------------------------------------------

@@ -35,6 +35,8 @@ from app.models import (
     Product,
     Unit,
 )
+from app.services.identity import assert_document_bound, is_unbound
+from app.services.orders.orders import prefill_delivery_from_customer
 
 
 def _tomorrow() -> date:
@@ -164,6 +166,12 @@ def process_intake_job(db: Session, job_id: str) -> None:
         requires_review = bool(
             getattr(extraction, "requires_human_review", False)
         ) or settings.intake_require_human_review
+        # An unbound conversation is always held, on top of the review rules
+        # above. Otherwise a confident extraction from an unknown chat would
+        # sail straight into a draft order with no customer at all — the exact
+        # hole this work closes (docs/IDENTITY_IMPLEMENTATION_SPEC.md §2.3).
+        if is_unbound(document):
+            requires_review = True
 
         # Step 4 + 5: normalize + match SKUs
         lines = _normalize_lines(
@@ -365,6 +373,11 @@ def _create_draft_order(
     db.add(order)
     db.flush()
 
+    # Pre-fill the delivery fields from the customer — a proposal, not a fact.
+    # It is shown to the human and still has to be confirmed before the order
+    # can be confirmed.
+    prefill_delivery_from_customer(db, order)
+
     for ln in lines:
         ol = OrderLine(
             order_id=order.id,
@@ -403,6 +416,10 @@ def confirm_intake_review(db: Session, job_id: str, *, actor=None) -> Order:
     document = db.get(IntakeDocument, job.document_id)
     if document is None:
         raise ValueError("IntakeDocument not found")
+
+    # Hard gate: no path from an unbound conversation to an order. Held
+    # documents are released by POST /identity/bind, not by confirming harder.
+    assert_document_bound(db, document)
 
     ext = (
         db.query(IntakeExtraction)

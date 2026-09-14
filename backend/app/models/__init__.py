@@ -4,6 +4,7 @@ from app.models.contract import ContractPrice, StandingOrderTemplate, StandingOr
 from app.models.customer import Customer, CustomerContact, CustomerProductAlias
 from app.models.delivery import Delivery, DeliveryLine, ProofOfDelivery
 from app.models.finance import Invoice, InvoiceLine, Payment
+from app.models.identity import CustomerIdentity
 from app.models.intake import IntakeDocument, IntakeExtraction, IntakeJob
 from app.models.order import Order, OrderLine
 from app.models.product import Product, ProductCategory, Unit
@@ -31,6 +32,7 @@ __all__ = [
     "Delivery", "DeliveryLine", "ProofOfDelivery",
     "Invoice", "InvoiceLine", "Payment",
     "IntakeDocument", "IntakeExtraction", "IntakeJob",
+    "CustomerIdentity",
     "Order", "OrderLine",
     "Product", "ProductCategory", "Unit",
     "Quotation", "QuotationLine",

@@ -35,6 +35,7 @@ import { useDetail, useMutate } from "../../api/hooks";
 import { formatDate, formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 import ConfidenceTag from "../../components/ConfidenceTag";
+import DeliveryConfirmPanel from "../../components/identity/DeliveryConfirmPanel";
 import OrderTimeline from "./OrderTimeline";
 import client from "../../api/client";
 import { parseStoredUser } from "../../types";
@@ -68,6 +69,13 @@ interface Order {
   confirmed_by: string | null;
   confirmed_at: string | null;
   notes: string | null;
+  // Gate 4 — where the order is going. `delivery_address` is pre-filled from
+  // the customer and is only a proposal until `delivery_confirmed_at` is set.
+  delivery_address: string | null;
+  delivery_contact_name: string | null;
+  delivery_contact_phone: string | null;
+  delivery_confirmed_at: string | null;
+  delivery_confirmed_by: string | null;
   line_count: number;
   created_at: string;
   lines?: OrderLine[];
@@ -303,6 +311,10 @@ export default function OrderDetailPage() {
 
   const editable = canMutate && EDITABLE_STATUSES.has(order.status);
   const showActions = canMutate;
+  // Gate 4. The backend refuses `POST /orders/{id}/confirm` while this is null,
+  // so the button must not pretend otherwise — clicking it would just produce a
+  // 409 the operator cannot act on.
+  const deliveryConfirmed = Boolean(order.delivery_confirmed_at);
 
   const lineColumns = [
     { title: t("pages.orders.colLineNo"), dataIndex: "line_no", width: 50 },
@@ -442,7 +454,17 @@ export default function OrderDetailPage() {
               )}
               {EDITABLE_STATUSES.has(order.status) && (
                 <Popconfirm
-                  title={t("pages.orders.confirmConfirm")}
+                  title={
+                    deliveryConfirmed
+                      ? t("pages.orders.confirmConfirm")
+                      : t("pages.identity.delivery.blockedHint")
+                  }
+                  description={
+                    deliveryConfirmed
+                      ? undefined
+                      : t("pages.identity.delivery.unconfirmedHint")
+                  }
+                  okButtonProps={{ disabled: !deliveryConfirmed }}
                   onConfirm={handleConfirm}
                   disabled={mutateLoading}
                 >
@@ -492,6 +514,15 @@ export default function OrderDetailPage() {
             label: t("pages.orders.details"),
             children: (
               <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                {/* Gate 4 sits above everything else on this tab: the order
+                    cannot be confirmed until somebody confirms where it goes,
+                    and that has to be the first thing an operator sees. */}
+                <DeliveryConfirmPanel
+                  order={order}
+                  canConfirm={canMutate}
+                  onConfirmed={detail.refresh}
+                />
+
                 <Descriptions column={3} size="small" bordered>
                   <Descriptions.Item label={t("pages.orders.colCustomer")}>
                     {pickName(lang, order.customer_name_en, order.customer_name_zh)}

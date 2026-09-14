@@ -101,6 +101,26 @@ def handle_draft_created(*, db: Session, order: Order) -> None:
             )
             return
 
+        # Same class of rule, same place, same reasoning. An order must never
+        # reach "confirmed" without a delivery address a person has actually
+        # checked, and auto-confirm by definition runs with nobody watching.
+        # This guard sits above the `auto_confirm` SystemSetting for the same
+        # reason the one above does: it must not be one dropdown away from
+        # being switched off.
+        #
+        # In practice this means auto-confirm cannot fire at all while the
+        # delivery rule is on, because no unattended path can set
+        # `delivery_confirmed_at`. That is the intended outcome — the only
+        # orders that reach "confirmed" without a person in the loop are ones
+        # where both rules were deliberately disabled.
+        if settings.require_delivery_confirmation and order.delivery_confirmed_at is None:
+            logger.info(
+                "order.draft_created: order %s left as draft — no confirmed "
+                "delivery address (require_delivery_confirmation is on)",
+                getattr(order, "id", "?"),
+            )
+            return
+
         # Reload the order from the passed session in case the caller's
         # identity map differs (intake pipeline commits first, then emits).
         o = db.get(Order, order.id) if order is not None else None

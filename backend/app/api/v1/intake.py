@@ -201,6 +201,25 @@ def get_document_endpoint(
     return _doc_out(doc, job)
 
 
+@router.get("/documents/{document_id}/company-proposal", response_model=None)
+def company_proposal_endpoint(
+    document_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("ops", "admin")),
+):
+    """The extraction's *proposal* for who this document belongs to.
+
+    Read-only by design: `POST /identity/bind` is the only thing that attaches
+    a customer, and it is always a human doing it. Returns `null` when nothing
+    was proposed (no text, or the extractor found nothing) so the bind screen
+    can simply not show the panel.
+    """
+    doc = get_document(db, document_id)
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    return (doc.document_meta or {}).get("company_proposal")
+
+
 @router.get("/documents/{document_id}/file", response_class=FileResponse)
 def download_document_file(
     document_id: str,
