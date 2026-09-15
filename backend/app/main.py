@@ -161,7 +161,20 @@ from app.services.notify import wecom_notify  # noqa: E402,F401
 
 @app.get("/api/health", tags=["system"])
 def health():
-    return {"status": "ok", "app": settings.app_name}
+    # Railway uses this path as the healthcheck, so everything here must stay
+    # cheap and free of I/O — these are pure string comparisons.
+    #
+    # Both secrets default to values published in this repo (it is public), and
+    # both are accepted as valid credentials: `service_key` authenticates the
+    # /api/v1/intake/* endpoints as a system actor, `wecom_gateway_key` is the
+    # ERP's half of the gateway pair. A deployment that never overrode them has
+    # no symptom at all, so surface it rather than let it stay invisible.
+    return {
+        "status": "ok",
+        "app": settings.app_name,
+        "service_key_is_default": settings.service_key_is_default,
+        "wecom_gateway_key_is_default": settings.wecom_gateway_key_is_default,
+    }
 
 
 # Undefined /api/* paths must return a JSON 404 — NOT the SPA HTML. The

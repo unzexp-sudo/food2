@@ -150,6 +150,31 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
+    @property
+    def service_key_is_default(self) -> bool:
+        """True while the intake service key is still the published placeholder.
+
+        `service_key` is accepted as `X-ERP-Service-Key` by every
+        `/api/v1/intake/*` endpoint and authenticates as a *system actor* — no
+        login, no role check. Its default is committed to this repo, so a
+        deployment that never overrode it is guarded by a value anyone who can
+        read the repo already knows. Comparing against the field's own default
+        avoids a second literal to keep in sync.
+        """
+        default = type(self).model_fields["service_key"].default
+        return (self.service_key or "").strip() == (default or "").strip()
+
+    @property
+    def wecom_gateway_key_is_default(self) -> bool:
+        """True while the ERP→gateway shared secret is still the placeholder.
+
+        This is the ERP's half of the pair; the gateway's half is
+        `WECOM_GATEWAY_SERVICE_KEY`. They must match, so rotating one alone
+        401s every outbound notification.
+        """
+        default = type(self).model_fields["wecom_gateway_key"].default
+        return (self.wecom_gateway_key or "").strip() == (default or "").strip()
+
     def files_path(self, *parts: str) -> Path:
         """Absolute path under the files dir; ensures directories exist."""
         base = Path(self.files_dir)
