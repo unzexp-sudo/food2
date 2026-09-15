@@ -33,32 +33,85 @@ from app.api.v1 import (
     wecom_intake,
 )
 from app.core.config import settings
-from app.core.database import SessionLocal, init_db
+from app.core.database import SessionLocal, init_db, is_deployed
+from app.core.security import hash_password
+from app.models import User
 
 _log = logging.getLogger("erp.main")
 
 
+def _should_seed_demo_data() -> bool:
+    """Whether to create the demo dataset on boot.
+
+    Unset (the default) is environment-derived: seed on a laptop, never inside a
+    container. `seed.py` creates users whose password is a well-known constant,
+    so on a durable production database the seed stops being something the next
+    deploy wipes and becomes a permanent, publicly reachable admin account.
+    """
+    if settings.seed_demo_data is not None:
+        return settings.seed_demo_data
+    return not is_deployed()
+
+
+def _bootstrap_admin(db) -> None:
+    """Create the first admin on an empty database, without any demo data.
+
+    This is the way into a fresh production database once the demo seed is off:
+    with no users at all nobody can log in, and the ERP has no other bootstrap
+    path. Deliberately a no-op unless BOTH settings are supplied.
+    """
+    email = (settings.bootstrap_admin_email or "").strip()
+    password = settings.bootstrap_admin_password or ""
+    if not email or not password:
+        return
+    if db.query(User).count() > 0:
+        return
+
+    db.add(
+        User(
+            email=email,
+            name="Admin",
+            role="admin",
+            password_hash=hash_password(password),
+        )
+    )
+    db.commit()
+    _log.warning(
+        "startup: created bootstrap admin %s — change this password now", email
+    )
+
+
+def _seed_or_bootstrap() -> None:
+    """Populate a brand-new database, or deliberately leave it alone."""
+    try:
+        with SessionLocal() as db:
+            if _should_seed_demo_data():
+                run_seed(db)
+                return
+            _bootstrap_admin(db)
+    except Exception:  # noqa: BLE001
+        _log.exception("startup: seeding FAILED — continuing without seed data")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Boot the schema + demo seed, but NEVER let a startup error take the
-    # whole container down. If the DB is briefly unreachable (e.g. a Railway
-    # Postgres plugin still spinning up, or a wrong ERP_DATABASE_URL), the
-    # process must still bind to PORT so /api/health answers 200 — otherwise
-    # Railway shows "Application failed to respond" and you can't even see
-    # the real error in the deploy logs. The exception is logged at ERROR;
-    # endpoints that need the DB will return 500 until the next restart /
-    # once the DB is reachable.
+    # Boot the schema, but NEVER let a startup error take the whole container
+    # down. If the DB is briefly unreachable (e.g. a Railway Postgres plugin
+    # still spinning up, or a wrong ERP_DATABASE_URL), the process must still
+    # bind to PORT so /api/health answers 200 — otherwise Railway shows
+    # "Application failed to respond" and you can't even see the real error in
+    # the deploy logs. The exception is logged at ERROR; endpoints that need the
+    # DB will return 500 until the next restart / once the DB is reachable.
+    #
+    # NOTE: that same leniency is why a green /api/health proves nothing about
+    # the database. Verify with a DB-backed endpoint, not the healthcheck.
     _log.info("startup: init_db (database_url=%s)", _safe_db_url(settings.database_url))
     try:
         init_db()
     except Exception:  # noqa: BLE001
         _log.exception("startup: init_db FAILED — app will start but DB-backed endpoints will 500")
     else:
-        try:
-            with SessionLocal() as db:
-                run_seed(db)
-        except Exception:  # noqa: BLE001
-            _log.exception("startup: seed FAILED — continuing without demo data")
+        _seed_or_bootstrap()
     yield
 
 

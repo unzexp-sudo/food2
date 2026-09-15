@@ -33,6 +33,24 @@ class Settings(BaseSettings):
     # disposable (a demo, a smoke test, a throwaway environment).
     allow_ephemeral_database: bool = False
 
+    # --- Demo seed -----------------------------------------------------------
+    # `seed.py` creates five demo users — all with the password "erp123", one of
+    # them an admin — plus a demo catalog, customers, wholesalers and contracts.
+    # That is exactly what you want on a laptop, and emphatically not what you
+    # want on a production database: a publicly-known admin password on a
+    # publicly reachable ERP. On ephemeral SQLite the seed was wiped on every
+    # deploy; on a durable Postgres it persists indefinitely.
+    #
+    # None (the default) means "decide from the environment": seed outside a
+    # container, never inside one. Set true/false to override explicitly.
+    seed_demo_data: bool | None = None
+
+    # Bootstrap the FIRST admin on an otherwise empty database, without seeding
+    # any demo data. Both values must be set for this to do anything. Use it to
+    # get into a fresh production database, then change the password.
+    bootstrap_admin_email: str = ""
+    bootstrap_admin_password: str = ""
+
     # Auth
     secret_key: str = "dev-secret-change-me"
     algorithm: str = "HS256"
