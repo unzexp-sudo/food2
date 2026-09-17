@@ -174,6 +174,11 @@ def health():
         "app": settings.app_name,
         "service_key_is_default": settings.service_key_is_default,
         "wecom_gateway_key_is_default": settings.wecom_gateway_key_is_default,
+        # Not a secret, but the same class of invisible config: under the
+        # default `mock` provider a photo or a scanned PDF is not read at all —
+        # it yields canned demo lines. See `image_extraction_is_simulated`.
+        "ai_provider": settings.ai_provider,
+        "image_extraction_is_simulated": settings.image_extraction_is_simulated,
     }
 
 

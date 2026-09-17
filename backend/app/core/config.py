@@ -175,6 +175,27 @@ class Settings(BaseSettings):
         default = type(self).model_fields["wecom_gateway_key"].default
         return (self.wecom_gateway_key or "").strip() == (default or "").strip()
 
+    @property
+    def image_extraction_is_simulated(self) -> bool:
+        """True when photos and scanned PDFs would be read by the FAKE extractor.
+
+        The `mock` provider is deterministic and offline, which is right for
+        tests — but for an `image` or a scanned PDF it does not parse anything.
+        It returns three canned lines (土豆 50斤 / 大白菜 30斤 / 五花肉 20斤).
+        Those are plausible products for this business, so the output looks like
+        a real reading of the customer's note.
+
+        The review gate does flag such a document ("line confidence unknown"),
+        so it cannot auto-submit — but a reviewer skimming plausible line items
+        is the failure mode this flag exists to make visible. Typed text, Excel
+        and text-layer PDFs are genuinely parsed under `mock` and are unaffected.
+
+        `openai` counts as simulated too: `OpenAIExtractor` is a stub that
+        delegates to the mock extractor and appends a note, so selecting it
+        changes nothing.
+        """
+        return (self.ai_provider or "mock").strip().lower() in ("", "mock", "openai")
+
     def files_path(self, *parts: str) -> Path:
         """Absolute path under the files dir; ensures directories exist."""
         base = Path(self.files_dir)

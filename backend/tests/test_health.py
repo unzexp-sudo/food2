@@ -45,3 +45,73 @@ def test_default_check_reads_the_default_off_the_model():
     default = Settings.model_fields["service_key"].default
     assert Settings(service_key=default).service_key_is_default is True
     assert Settings(service_key="something-else").service_key_is_default is False
+
+
+def test_health_reports_that_photos_are_not_really_being_read(client, monkeypatch):
+    """The `mock` provider does not read an image — it returns three canned
+    lines that happen to be plausible products for this business.
+
+    A deployment that never set `ai_provider` therefore looks completely healthy
+    while every customer photo produces fabricated line items. Nothing else in
+    the system says so, which is exactly why this has to be on /api/health.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ai_provider", "mock")
+    body = client.get("/api/health").json()
+
+    assert body["ai_provider"] == "mock"
+    assert body["image_extraction_is_simulated"] is True
+
+
+def test_health_clears_the_flag_once_a_real_vision_provider_is_set(client, monkeypatch):
+    """Guards against a warning that can never be silenced — that kind gets
+    ignored, and then it protects nothing."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ai_provider", "aliyun_qwen")
+    body = client.get("/api/health").json()
+
+    assert body["ai_provider"] == "aliyun_qwen"
+    assert body["image_extraction_is_simulated"] is False
+
+
+def test_openai_counts_as_simulated_because_it_is_a_stub():
+    """`OpenAIExtractor` delegates to `MockExtractor` and appends a note, so
+    selecting it changes nothing. Reporting it as "real" would be a lie in the
+    one place an operator goes to find out."""
+    from app.core.config import Settings
+
+    assert Settings(ai_provider="openai").image_extraction_is_simulated is True
+    assert Settings(ai_provider="").image_extraction_is_simulated is True
+    assert Settings(ai_provider="aliyun_qwen").image_extraction_is_simulated is False
+    assert Settings(ai_provider="MOCK").image_extraction_is_simulated is True
+
+
+def test_the_mock_image_path_really_does_return_canned_lines(tmp_path):
+    """Pins the actual behaviour behind the flag, so the flag cannot drift away
+    from what the extractor does.
+
+    This is the test that would have caught the problem: it asserts the mock
+    image path ignores the file's contents entirely.
+    """
+    from app.ai.adapters import MockExtractor
+
+    blank = tmp_path / "order.png"
+    blank.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    other = tmp_path / "different.png"
+    other.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\xff" * 4096)
+
+    first = MockExtractor().extract(source_type="image", file_path=str(blank))
+    second = MockExtractor().extract(source_type="image", file_path=str(other))
+
+    assert [l.product_name for l in first.lines] == ["土豆", "大白菜", "五花肉"]
+    assert [(l.product_name, l.quantity) for l in first.lines] == [
+        (l.product_name, l.quantity) for l in second.lines
+    ], "two different images produced different output — the flag is stale"
+
+    # And the review gate does catch it, so this is a hazard rather than a
+    # silent auto-submit.
+    from app.ai.adapters import apply_review_gate
+
+    assert apply_review_gate(first).requires_human_review is True
