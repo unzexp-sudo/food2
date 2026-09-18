@@ -909,7 +909,9 @@ const zh = {
     },
     wecom: {
       gatewayUnreachable:
-        "无法连接企业微信网关（{{url}}）。请使用 `python -m uvicorn app.main:app --port 8100` 启动网关服务。",
+        "无法连接企业微信网关（{{url}}）。可能是网关未运行，也可能是本站地址不在网关的允许来源列表中 —— 请检查网关服务的 WECOM_CORS_ORIGINS。",
+      gatewayNotConfigured:
+        "此构建未提供 VITE_WECOM_GATEWAY_URL，因此请求的是本地开发默认地址 {{url}}。已部署的构建无法访问该地址：请在本服务上把 VITE_WECOM_GATEWAY_URL 设为「构建变量」后重新部署。",
       modeLive: "正式",
       modeMock: "模拟",
       messages: {

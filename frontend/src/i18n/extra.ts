@@ -29,6 +29,8 @@ const extra = {
   // place and cannot drift from the code that reads them.
   configWarnings: {
     title: "{{count}} server configuration problem(s) — some features are switched off",
+    gatewayUrlNotBuiltIn:
+      "This build was compiled without a WeCom gateway address, so every WeCom screen is calling a local address no user can reach. Set",
     loopbackGateway:
       "Customer notifications are being sent to the ERP's own container, so no customer is ever texted and nothing errors. Set",
     noOpsChat:

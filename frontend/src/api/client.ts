@@ -61,13 +61,31 @@ export const api = {
 /**
  * WeCom Gateway client (docs/WECOM_CONTRACTS.md).
  *
- * The gateway is a separate service on port 8100 and is NOT behind the Vite
- * `/api` proxy, so it needs its own absolute baseURL. Override with
- * `VITE_WECOM_GATEWAY_URL` (e.g. when the gateway runs on another host).
+ * The gateway is a separate service and is NOT behind the Vite `/api` proxy, so
+ * it needs its own absolute baseURL. Override with `VITE_WECOM_GATEWAY_URL`.
  */
-export const WECOM_GATEWAY_URL: string =
-  (import.meta.env.VITE_WECOM_GATEWAY_URL as string | undefined)?.replace(/\/$/, "") ||
-  "http://127.0.0.1:8100";
+const configuredGatewayUrl =
+  (import.meta.env.VITE_WECOM_GATEWAY_URL as string | undefined)?.trim().replace(/\/$/, "") ||
+  undefined;
+
+/**
+ * True when this bundle was compiled without `VITE_WECOM_GATEWAY_URL`.
+ *
+ * Vite inlines `import.meta.env.VITE_*` at **build** time, so this is a property
+ * of the compiled bundle and not of the running service: setting the variable on
+ * a deployed service at runtime changes nothing, and redeploying without it
+ * bakes in the fallback below. That fallback is a loopback address — correct for
+ * `npm run dev` on a laptop, and unreachable for every real user of a deployed
+ * build.
+ *
+ * The distinction is invisible at runtime, which is what makes it dangerous:
+ * production ran this way for as long as the WeCom pages have existed, and the
+ * only symptom was an alert telling the operator to start a server on their own
+ * machine. Exported so the screens can name the actual cause instead.
+ */
+export const WECOM_GATEWAY_URL_IS_UNCONFIGURED = configuredGatewayUrl === undefined;
+
+export const WECOM_GATEWAY_URL: string = configuredGatewayUrl ?? "http://127.0.0.1:8100";
 
 const gatewayClient = axios.create({
   baseURL: WECOM_GATEWAY_URL,

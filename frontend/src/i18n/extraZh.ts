@@ -23,6 +23,8 @@ const extraZh = {
   // 不会和读取它的代码走散。
   configWarnings: {
     title: "{{count}} 项服务端配置有问题 — 部分功能处于关闭状态",
+    gatewayUrlNotBuiltIn:
+      "此构建未提供企业微信网关地址，所有企业微信页面都在请求用户无法访问的本地地址。请设置",
     loopbackGateway:
       "客户通知被发往 ERP 自己的容器，客户永远收不到消息，而且不会报任何错。请设置",
     noOpsChat: "订单进入待审核时没有人收到提醒，积压的订单无人处理。请设置",

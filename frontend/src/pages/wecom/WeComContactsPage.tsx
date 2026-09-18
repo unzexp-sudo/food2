@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert,
   Button,
   Card,
   Form,
@@ -14,10 +13,11 @@ import {
 } from "antd";
 import { LinkOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
-import { api, gatewayApi, WECOM_GATEWAY_URL, type Page } from "../../api/client";
+import { api, gatewayApi, type Page } from "../../api/client";
 import { useList, useMutate } from "../../api/hooks";
 import { formatDateTime, pickName } from "../../utils/format";
 import ConfidenceTag from "../../components/ConfidenceTag";
+import GatewayUnreachableAlert from "../../components/GatewayUnreachableAlert";
 import { parseStoredUser } from "../../types";
 import type { ErpCustomer, WeComContact } from "./types";
 
@@ -170,14 +170,7 @@ export default function WeComContactsPage() {
         </Button>
       }
     >
-      {list.data === null && !list.loading && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message={t("pages.wecom.gatewayUnreachable", { url: WECOM_GATEWAY_URL })}
-        />
-      )}
+      {list.data === null && !list.loading && <GatewayUnreachableAlert />}
 
       <Space wrap size="middle" style={{ marginBottom: 12 }}>
         <Input.Search

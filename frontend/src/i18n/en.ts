@@ -910,7 +910,9 @@ const en = {
     },
     wecom: {
       gatewayUnreachable:
-        "Cannot reach the WeCom gateway at {{url}}. Start it with `python -m uvicorn app.main:app --port 8100`.",
+        "Cannot reach the WeCom gateway at {{url}}. Either it is down, or this site's address is not among the gateway's allowed origins — check WECOM_CORS_ORIGINS on the gateway service.",
+      gatewayNotConfigured:
+        "This build was compiled without VITE_WECOM_GATEWAY_URL, so it calls {{url}} — the local development default. A deployed build cannot reach that address: set VITE_WECOM_GATEWAY_URL as a BUILD variable on this service, then redeploy.",
       modeLive: "live",
       modeMock: "mock",
       messages: {

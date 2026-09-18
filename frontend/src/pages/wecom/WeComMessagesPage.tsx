@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Card, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { PaperClipOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
-import { gatewayApi, WECOM_GATEWAY_URL, type Page } from "../../api/client";
+import { gatewayApi, type Page } from "../../api/client";
 import { useList, useMutate } from "../../api/hooks";
 import { api } from "../../api/client";
 import { formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
+import GatewayUnreachableAlert from "../../components/GatewayUnreachableAlert";
 import { parseStoredUser } from "../../types";
 import type { ErpCustomer, WeComMessage } from "./types";
 
@@ -156,14 +157,7 @@ export default function WeComMessagesPage() {
         </Button>
       }
     >
-      {list.data === null && !list.loading && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message={t("pages.wecom.gatewayUnreachable", { url: WECOM_GATEWAY_URL })}
-        />
-      )}
+      {list.data === null && !list.loading && <GatewayUnreachableAlert />}
 
       <Space wrap size="middle" style={{ marginBottom: 12 }}>
         <Select

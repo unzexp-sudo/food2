@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { Alert, Button, Card, Select, Space, Table, Tag, Typography } from "antd";
+import { Button, Card, Select, Space, Table, Tag, Typography } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
-import { gatewayApi, WECOM_GATEWAY_URL } from "../../api/client";
+import { gatewayApi } from "../../api/client";
 import { useList } from "../../api/hooks";
 import { formatDateTime } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
+import GatewayUnreachableAlert from "../../components/GatewayUnreachableAlert";
 import type { WeComOutbound } from "./types";
 
 /**
@@ -136,14 +137,7 @@ export default function WeComOutboundPage() {
         </Button>
       }
     >
-      {list.data === null && !list.loading && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message={t("pages.wecom.gatewayUnreachable", { url: WECOM_GATEWAY_URL })}
-        />
-      )}
+      {list.data === null && !list.loading && <GatewayUnreachableAlert />}
 
       <Space wrap size="middle" style={{ marginBottom: 12 }}>
         <Select

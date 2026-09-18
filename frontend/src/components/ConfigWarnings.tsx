@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Space, Typography } from "antd";
 import { useLanguage } from "../i18n";
+import { WECOM_GATEWAY_URL_IS_UNCONFIGURED } from "../api/client";
 
 /**
  * The `/api/health` fields this banner reads.
@@ -24,6 +25,13 @@ interface Health {
  *
  * Ordered by what they cost, worst first:
  *
+ *  0. `VITE_WECOM_GATEWAY_URL` missing from the BUILD — every WeCom screen in
+ *     this bundle calls a loopback address, so all three of them show "cannot
+ *     reach the gateway" and an empty table, to every user, forever. It is first
+ *     because it is the only one of these that no runtime variable can fix: Vite
+ *     inlines `VITE_*` at build time, so the value is a property of the compiled
+ *     bundle. Unlike the others it does not come from `/api/health` — the server
+ *     cannot see it — so `isBad` reads the client constant.
  *  1. `wecom_gateway_url_is_loopback` — the ERP posts every customer
  *     notification into its own container. Nothing is ever delivered and
  *     nothing errors; the only symptom is "the customer says nobody texted
@@ -43,6 +51,13 @@ const RULES: {
   env: string;
   i18n: string;
 }[] = [
+  {
+    // A dev build without the variable is correct and must stay quiet, which is
+    // why this is gated on PROD and not on the value alone.
+    isBad: () => WECOM_GATEWAY_URL_IS_UNCONFIGURED && import.meta.env.PROD,
+    env: "VITE_WECOM_GATEWAY_URL",
+    i18n: "configWarnings.gatewayUrlNotBuiltIn",
+  },
   {
     isBad: (h) => h.wecom_gateway_url_is_loopback === true,
     env: "ERP_WECOM_GATEWAY_URL",
