@@ -966,6 +966,45 @@ def _media_type_for(content: bytes, filename: str | None = None) -> str:
     return _EXT_MEDIA_TYPES.get(suffix, "image/jpeg")
 
 
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+
+
+def markdown_to_text(markdown: str) -> str:
+    """Turn Mistral's markdown into plain lines the line parser can read.
+
+    Markdown is not text, and the difference is not cosmetic:
+
+    * `![img-0.jpeg](img-0.jpeg)` is a placeholder for a figure Mistral
+      extracted. The line parser reads it as a PRODUCT NAME. Observed live: a
+      photo of a phone's gallery view produced order lines literally named
+      `![img-0.jpeg](img-0.jpeg)` and `1/3` (the gallery counter).
+    * A markdown table splits the product name from its quantity with pipes, so
+      `| 土豆 | 50 | 斤 |` arrives as one line whose "name" contains pipes. It
+      is flattened to `土豆 50 斤`, which the existing parser reads correctly.
+    * `|---|---|` separator rows and `**`/`#` decoration would otherwise end up
+      inside a product name.
+
+    Anything the parser still cannot read falls through to the existing
+    name-only behaviour, and the review gate flags it — this only removes noise,
+    it never invents a quantity.
+    """
+    out: list[str] = []
+    for raw_line in (markdown or "").splitlines():
+        line = _MD_IMAGE_RE.sub(" ", raw_line)
+        line = _MD_LINK_RE.sub(r"\1", line)
+        line = line.replace("**", "").lstrip("#").strip()
+        # A table separator row (`|---|---|`) carries no content at all.
+        if line and "-" in line and re.fullmatch(r"[\s|:-]+", line):
+            continue
+        if "|" in line:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            line = " ".join(c for c in cells if c)
+        if line:
+            out.append(line)
+    return "\n".join(out)
+
+
 class MistralOcrExtractor:
     """Reads a photo or a scanned PDF with Mistral's document AI endpoint.
 
@@ -1040,26 +1079,34 @@ class MistralOcrExtractor:
                 # message name the document instead of a wall of base64.
                 chunk["document_name"] = original_filename
 
-        markdown, confidence, pages, degraded = self._ocr(chunk)
+        markdown, confidence, page_min, pages, degraded = self._ocr(chunk)
 
         notes = [f"mistral {settings.mistral_ocr_model} pages={pages}"]
         if degraded:
             notes.append(degraded)
+        # The page AVERAGE hides a single badly-read character, and a single
+        # badly-read digit is a wrong quantity on a real order. Observed live: a
+        # page whose average was 0.92 had a worst-word score of 0.13. Surface it
+        # so the reviewer knows to look closely rather than trusting the number.
+        if page_min is not None and page_min < settings.ocr_field_confidence_floor:
+            notes.append(f"lowest page confidence {page_min:.2f}")
 
         lines: list[RawLine] = []
         structured: dict | None = None
         doc_type = "ocr_image" if source_type == "image" else "ocr_pdf"
 
-        # Same dispatch order as the text path: a recognized supplier-order
-        # table keeps its header + sub-customer breakdowns.
-        struct = _structured_for(markdown)
+        # Markdown is not text — see markdown_to_text. Same dispatch order as the
+        # typed path: a recognized supplier-order table keeps its header and its
+        # sub-customer breakdowns.
+        text = markdown_to_text(markdown)
+        struct = _structured_for(text)
         if struct is not None:
             lines = _structured_to_raw_lines(struct)
             structured = struct
             doc_type = "supplier_order_table"
             notes.append(f"structured_order lines={len(lines)}")
         else:
-            lines = parse_text_lines(markdown)
+            lines = parse_text_lines(text)
             notes.append(f"ocr_lines={len(lines)}")
 
         if confidence is not None:
@@ -1079,12 +1126,14 @@ class MistralOcrExtractor:
             image_path=file_path if source_type == "image" else None,
         ))
 
-    def _ocr(self, chunk: dict) -> tuple[str, float | None, int, str]:
-        """POST one document to Mistral. Returns (markdown, confidence, pages, note).
+    def _ocr(self, chunk: dict) -> tuple[str, float | None, float | None, int, str]:
+        """POST one document to Mistral.
 
-        `confidence` is None when the deployment will not return scores — and
-        the review gate reads None as "unverified" and flags the document, so
-        that degradation fails safe rather than silently approving.
+        Returns (markdown, average_confidence, worst_page_confidence, pages, note).
+
+        Confidence is None when the deployment will not return scores — and the
+        review gate reads None as "unverified" and flags the document, so that
+        degradation fails safe rather than silently approving.
         """
         import httpx
 
@@ -1101,32 +1150,43 @@ class MistralOcrExtractor:
             "include_image_base64": False,
             "include_blocks": False,
         }
+        optional: dict[str, Any] = {
+            # Page-level aggregate only: word granularity would bloat the
+            # response with per-word scores we do not use.
+            "confidence_scores_granularity": "page",
+            # Without this a recognized table is replaced by a placeholder
+            # reference rather than returned inline, so the line items would be
+            # lost from the markdown entirely.
+            "table_format": "markdown",
+        }
 
-        resp = httpx.post(
-            url,
-            headers=headers,
-            json={**payload, "confidence_scores_granularity": "page"},
-            timeout=120,
-        )
+        resp = httpx.post(url, headers=headers, json={**payload, **optional}, timeout=120)
         degraded = ""
-        # `confidence_scores_granularity` is an optional request field. If this
-        # deployment rejects it, retry once without it rather than failing an
-        # intake over a nice-to-have — and say so in the notes.
+        # Both of the above are optional request fields. If this deployment
+        # rejects them, retry once without them rather than failing an intake
+        # over a nice-to-have — and say so in the notes. A 400 is what an
+        # unsupported field returns; a 401/403/429 is not retried.
         if resp.status_code == 400:
             resp = httpx.post(url, headers=headers, json=payload, timeout=120)
-            degraded = "confidence scores unavailable (retried without)"
+            degraded = "optional request fields rejected (retried without confidence scores/table format)"
         resp.raise_for_status()
         data = resp.json()
 
         pages = data.get("pages") or []
         markdown = "\n".join((p.get("markdown") or "") for p in pages)
-        scores = [
+        averages = [
             (p.get("confidence_scores") or {}).get("average_page_confidence_score")
             for p in pages
         ]
-        vals = [float(s) for s in scores if isinstance(s, (int, float))]
+        minimums = [
+            (p.get("confidence_scores") or {}).get("minimum_page_confidence_score")
+            for p in pages
+        ]
+        vals = [float(v) for v in averages if isinstance(v, (int, float))]
+        mins = [float(v) for v in minimums if isinstance(v, (int, float))]
         confidence = round(sum(vals) / len(vals), 4) if vals else None
-        return markdown, confidence, len(pages), degraded
+        worst = min(mins) if mins else None
+        return markdown, confidence, worst, len(pages), degraded
 
 
 def get_extractor():

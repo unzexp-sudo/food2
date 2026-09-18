@@ -37,16 +37,19 @@ class _FakeResponse:
             )
 
 
-def _page(markdown: str, score: float | None = None) -> dict:
+def _page(markdown: str, score: float | None = None, minimum: float | None = None) -> dict:
     page: dict = {"index": 0, "markdown": markdown, "images": []}
     if score is not None:
-        page["confidence_scores"] = {"average_page_confidence_score": score}
+        scores: dict = {"average_page_confidence_score": score}
+        if minimum is not None:
+            scores["minimum_page_confidence_score"] = minimum
+        page["confidence_scores"] = scores
     return page
 
 
-def _payload(markdown: str, score: float | None = None) -> dict:
+def _payload(markdown: str, score: float | None = None, minimum: float | None = None) -> dict:
     return {
-        "pages": [_page(markdown, score)],
+        "pages": [_page(markdown, score, minimum)],
         "model": "mistral-ocr-latest",
         "usage_info": {"pages_processed": 1},
     }
@@ -90,6 +93,10 @@ def test_an_image_goes_as_a_data_uri_typed_from_its_bytes(tmp_path, monkeypatch,
     assert document["type"] == "image_url"
     assert document["image_url"].startswith("data:image/png;base64,")
     assert calls[0]["json"]["model"] == "mistral-ocr-latest"
+    # Tables must come back inline. Without this a recognized table is replaced
+    # by a placeholder reference and the line items vanish from the markdown.
+    assert calls[0]["json"]["table_format"] == "markdown"
+    assert calls[0]["json"]["confidence_scores_granularity"] == "page"
 
 
 def test_a_jpeg_is_still_a_jpeg(tmp_path, monkeypatch, mistral_on):
@@ -204,9 +211,10 @@ def test_no_confidence_scores_leaves_the_document_flagged(tmp_path, monkeypatch,
     assert "unverified" in result.parser_notes
 
 
-def test_a_rejected_confidence_field_retries_without_it(tmp_path, monkeypatch, mistral_on):
-    """`confidence_scores_granularity` is optional. If the deployment rejects
-    it we drop it rather than fail an intake over a nice-to-have — and say so."""
+def test_a_rejected_optional_field_retries_without_it(tmp_path, monkeypatch, mistral_on):
+    """`confidence_scores_granularity` and `table_format` are both optional. If
+    the deployment rejects them we drop them rather than fail an intake over a
+    nice-to-have — and say so."""
     path = tmp_path / "note.png"
     path.write_bytes(PNG_BYTES)
     calls: list[dict] = []
@@ -225,9 +233,106 @@ def test_a_rejected_confidence_field_retries_without_it(tmp_path, monkeypatch, m
 
     assert len(calls) == 2
     assert "confidence_scores_granularity" in calls[0]
+    assert "table_format" in calls[0]
     assert "confidence_scores_granularity" not in calls[1]
+    assert "table_format" not in calls[1]
     assert [l.product_name for l in result.lines] == ["土豆"]
-    assert "confidence scores unavailable" in result.parser_notes
+    assert "optional request fields rejected" in result.parser_notes
+
+
+def test_an_auth_failure_is_not_retried(tmp_path, monkeypatch, mistral_on):
+    """Only a 400 means "unknown field". A bad key must fail immediately rather
+    than double every call."""
+    path = tmp_path / "note.png"
+    path.write_bytes(PNG_BYTES)
+    calls = _capture(monkeypatch, {"detail": "Invalid API Key"}, status_code=401)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        MistralOcrExtractor().extract(
+            source_type="image", file_path=str(path), original_filename="note.png"
+        )
+
+    assert len(calls) == 1
+
+
+# --- markdown is not text -----------------------------------------------------
+
+def test_image_placeholders_never_become_product_lines(tmp_path, monkeypatch, mistral_on):
+    """Observed live on a real fixture: Mistral read a photo of a phone's
+    gallery view and returned `![img-0.jpeg](img-0.jpeg)` placeholders alongside
+    the gallery counter. The placeholders are pure markdown noise and the line
+    parser read them as product names, so they would have landed on a draft
+    order as line items.
+
+    The status-bar text (`18:21 N`, `56%`, `1/3`) is NOT stripped: it really is
+    text on the image, and guessing which real-world strings are "not products"
+    is how a filter silently eats a line item. It stays visible to the reviewer,
+    which is what the review gate is for.
+    """
+    path = tmp_path / "note.png"
+    path.write_bytes(PNG_BYTES)
+    _capture(monkeypatch, _payload(
+        "18:21 N\n\n56%\n\n1/3\n\n![img-0.jpeg](img-0.jpeg)\n\n![img-1.jpeg](img-1.jpeg)\n\n土豆 50斤"
+    ))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="note.png"
+    )
+
+    names = [l.product_name for l in result.lines]
+    assert "土豆" in names
+    assert not any("img-" in n for n in names), names
+    assert not any("![" in n for n in names), names
+
+
+def test_a_markdown_table_row_keeps_its_quantity(tmp_path, monkeypatch, mistral_on):
+    """Pipes would otherwise leave the product name as `| 土豆 |` and split the
+    quantity away from it — the normal shape for a supplier order slip."""
+    path = tmp_path / "note.png"
+    path.write_bytes(PNG_BYTES)
+    _capture(monkeypatch, _payload(
+        "| 商品 | 数量 | 单位 |\n"
+        "|------|------|------|\n"
+        "| 土豆 | 50 | 斤 |\n"
+        "| 大白菜 | 30 | 斤 |"
+    ))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="note.png"
+    )
+
+    parsed = {l.product_name: l.quantity for l in result.lines}
+    assert parsed.get("土豆") == 50.0
+    assert parsed.get("大白菜") == 30.0
+    assert not any("|" in n for n in parsed)
+    assert not any("-" in n for n in parsed)
+
+
+def test_decoration_is_stripped_from_a_product_name(tmp_path, monkeypatch, mistral_on):
+    path = tmp_path / "note.png"
+    path.write_bytes(PNG_BYTES)
+    _capture(monkeypatch, _payload("# 订单\n\n**土豆** 50斤"))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="note.png"
+    )
+
+    assert [l.product_name for l in result.lines] == ["订单", "土豆"]
+
+
+def test_the_worst_page_score_is_surfaced_when_it_is_low(tmp_path, monkeypatch, mistral_on):
+    """The average hides a single misread digit, and a single misread digit is a
+    wrong quantity. Observed live: average 0.92, worst word 0.13."""
+    path = tmp_path / "note.png"
+    path.write_bytes(PNG_BYTES)
+    _capture(monkeypatch, _payload("土豆 50斤", score=0.92, minimum=0.13))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="note.png"
+    )
+
+    assert "lowest page confidence 0.13" in result.parser_notes
+    assert result.overall_confidence == 0.92
 
 
 # --- the failure we refuse ----------------------------------------------------
