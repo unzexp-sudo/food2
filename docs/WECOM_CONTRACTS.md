@@ -346,9 +346,18 @@ Resolution: `external_userid` → else contacts bound to `customer_id` → else
 `chat_id` from that customer's order group → else `status=skipped`
 (`error="no WeCom destination for customer"`).
 
+After resolution the destination is checked against `WECOM_SEND_ALLOWLIST`
+(live mode only). A destination that is not on the list is **not** sent to and
+is logged as `status=blocked` with the reason in `error`. The allowlist is
+checked *after* resolution on purpose — it guards against a mis-resolved
+customer receiving someone else's order, and because the check comes second, a
+binding change can be verified from the log without a message leaving. An
+internal ops alert (`chat_id` set, no `customer_id`, no `external_userid`) is
+exempt: it carries no customer and targets an admin-configured group.
+
 Response:
 ```json
-{"outbound_id": "...", "status": "sent|mock|skipped|failed", "to_type": "...", "to_id": "...", "rendered_text": "..."}
+{"outbound_id": "...", "status": "sent|mock|skipped|failed|pending|blocked", "to_type": "...", "to_id": "...", "rendered_text": "..."}
 ```
 
 ### Templates (each must render in `en` and `zh`)
@@ -357,9 +366,38 @@ Response:
 | `order_confirmed` | order status → `confirmed` | order_number, delivery_date, lines[], total |
 | `needs_customer_confirm` | order status → `pending_confirmation` | order_number, lines[], reason |
 | `parse_failed` | intake job → `failed` | msgid, error |
+| `intake_needs_review` | intake job → `needs_review` | job_id, document_id, filename, source_type |
 | `out_for_delivery` | delivery → `delivering` | order_number, driver, eta |
 | `delivered` | delivery → `delivered`/`partial` | order_number, delivered_lines[] |
 | `invoice_ready` | invoice created | invoice_number, order_number, total |
+
+`intake_needs_review` is the only template with no customer on it: it goes to
+the internal ops group (`ERP_WECOM_OPS_CHAT_ID` → `WECOM_INTERNAL_OPS_CHAT_ID`)
+to say an extraction is parked. It still writes a `wecom_outbound_log` row, so
+it appears in the ERP's outbound log alongside the customer messages.
+
+### The two outbound enums, and the four places they are written down
+
+`TemplateName` and `OutboundStatus` are defined in
+`WeCom1/app/schemas/wecom.py`. Both are mirrored in this repository:
+
+| where | what |
+|---|---|
+| `backend/app/services/notify/wecom_notify.py` | which templates the ERP actually sends |
+| `frontend/src/pages/wecom/WeComOutboundPage.tsx` | the log's two filter dropdowns |
+| `frontend/src/i18n/{en,zh}.ts` | the label for each value |
+| this table, above | the contract |
+
+These drifted: the page listed six templates and five statuses while the ERP
+sent seven and the gateway could report six, so `intake_needs_review` and
+`blocked` — the status every real send is in while the allowlist is in force —
+were on screen but could not be filtered to. Nothing failed.
+
+`backend/tests/test_outbound_mirrors.py` now reads the first three and fails if
+they disagree. It cannot read the gateway's schema (different repository), so
+that leg is pinned as a literal in the test; changing the gateway means changing
+the pin, visibly. Add a template or a status and that test is what tells you the
+other mirrors still need updating.
 
 Transport:
 - `to_type=user` → `externalcontact/message/send` (needs `WECOM_AGENT_ID`)

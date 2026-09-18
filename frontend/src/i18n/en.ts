@@ -976,6 +976,7 @@ const en = {
         template_order_confirmed: "Order confirmed",
         template_needs_customer_confirm: "Needs confirmation",
         template_parse_failed: "Parse failed",
+        template_intake_needs_review: "Order waiting for review",
         template_out_for_delivery: "Out for delivery",
         template_delivered: "Delivered",
         template_invoice_ready: "Invoice ready",

@@ -90,5 +90,11 @@ const COLOR_BY_DOMAIN: Partial<Record<StatusDomain, Record<string, string>>> = {
 export default function StatusTag({ domain, value }: { domain: StatusDomain; value: string }) {
   const { t } = useLanguage();
   const color = COLOR_BY_DOMAIN[domain]?.[value] ?? COLOR_BY_VALUE[value] ?? "default";
-  return <Tag color={color}>{t(`status.${domain}.${value}`)}</Tag>;
+  // `defaultValue` is load-bearing. Every status enum this renders is mirrored
+  // from a backend schema in one of two repos, and nothing compares the mirror
+  // to its source. Without the fallback a status the UI has not caught up with
+  // renders as the literal string "status.order.some_new_state" — which reads
+  // as a broken page, not as "this build is older than the API". With it, the
+  // operator sees the raw value and knows exactly what they are looking at.
+  return <Tag color={color}>{t(`status.${domain}.${value}`, { defaultValue: value })}</Tag>;
 }

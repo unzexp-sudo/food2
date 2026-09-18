@@ -975,6 +975,7 @@ const zh = {
         template_order_confirmed: "订单已确认",
         template_needs_customer_confirm: "待客户确认",
         template_parse_failed: "解析失败",
+        template_intake_needs_review: "订单待审核",
         template_out_for_delivery: "配送中",
         template_delivered: "已送达",
         template_invoice_ready: "发票已开具",
