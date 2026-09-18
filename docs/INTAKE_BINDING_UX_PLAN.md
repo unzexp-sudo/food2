@@ -210,6 +210,14 @@ was accurate but pointed at the wrong block: `_resolve_identity` already writes
 (`wecom_intake.py:166-172`), and `/identity/unbound` has always returned them. **The data
 was already in the ERP; only the intake serialiser dropped it, so no WeCom1 change is
 needed.** Lesson: check the *identity* block, not only `wecom_block`.
+
+**`lookup-customer` cannot do this job, and should not be retried for it.**
+`GET /intake/wecom/lookup-customer` (`wecom_intake.py:138`) is **exact-match only** —
+it takes a `code` or a `phone` and returns one customer or `{"found": false}`. It is the
+*upstream* cascade's tool: it is what the gateway calls *before* a row is held, which is
+why a held row is exactly the case where it has already returned nothing. It needs the
+very field the row is missing. A UI suggestion list needs the opposite shape — match on
+the name we *do* have, return several candidates, and say why each matched.
 - i18n keys added to **both** `extra.ts` and `extraZh.ts` (there is still no parity test).
 
 ### S4 — ERP-wide audit of the same anti-pattern
