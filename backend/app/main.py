@@ -183,6 +183,11 @@ def health():
         "notify_enabled": settings.notify_enabled,
         "wecom_gateway_url": settings.wecom_gateway_url,
         "wecom_gateway_url_is_loopback": settings.wecom_gateway_url_is_loopback,
+        # `intake.needs_review` is the one notification with no customer on it —
+        # it pings the ops group that a job is parked. Unset, the handler logs
+        # and returns, so the review queue fills with nobody told; the only
+        # symptom is a list nobody looked at. Report whether it can fire.
+        "wecom_ops_chat_id_is_set": settings.wecom_ops_chat_id_is_set,
         # Not a secret, but the same class of invisible config: under the
         # default `mock` provider a photo or a scanned PDF is not read at all —
         # it yields canned demo lines. See `image_extraction_is_simulated`.

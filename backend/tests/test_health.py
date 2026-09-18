@@ -282,3 +282,76 @@ def test_a_real_parse_clears_the_fabricated_flag(tmp_path, monkeypatch):
     assert res.requires_human_review is False, (
         "the document was genuinely parsed — it must not be parked as unread"
     )
+
+
+# ---------------------------------------------------------------------------
+# The review ping is the one notification with no customer on it
+# ---------------------------------------------------------------------------
+#
+# Every extraction stops for review, so the parked-job queue fills on its own.
+# `intake.needs_review` is the only thing that announces it, and with
+# `WECOM_OPS_CHAT_ID` unset the handler logs one INFO line and returns — the job
+# is still queued, but nobody is told. That behaviour is pinned by
+# `test_mandatory_review.py::test_review_push_skipped_when_unconfigured`; what
+# these tests add is that the state is *visible from outside*, because a log
+# line nobody reads is indistinguishable from a feature that works.
+
+
+def test_health_reports_whether_the_review_ping_can_go_out(client, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "wecom_ops_chat_id", "ops-chat-123")
+    assert client.get("/api/health").json()["wecom_ops_chat_id_is_set"] is True
+
+
+def test_the_review_ping_reads_as_off_on_the_shipped_default(client):
+    """The default is empty, so a deployment that never set the variable — the
+    state production is actually in — must read as "cannot announce"."""
+    from app.core.config import Settings
+
+    default = Settings.model_fields["wecom_ops_chat_id"].default
+    assert default == "", "the default changed; this flag's meaning moved with it"
+    assert Settings(wecom_ops_chat_id=default).wecom_ops_chat_id_is_set is False
+    assert client.get("/api/health").json()["wecom_ops_chat_id_is_set"] is False
+
+
+def test_the_review_ping_flag_is_not_an_unsilenceable_warning():
+    """A flag that cannot be cleared gets ignored, and then it protects nothing.
+    Whitespace is not a chat id either — it would be sent as an empty target."""
+    from app.core.config import Settings
+
+    assert Settings(wecom_ops_chat_id="ops-chat-123").wecom_ops_chat_id_is_set is True
+    assert Settings(wecom_ops_chat_id="   ").wecom_ops_chat_id_is_set is False
+
+
+def test_the_flag_agrees_with_what_the_handler_does(client, admin_headers, require_review, monkeypatch):
+    """Ties the reported flag to the real behaviour rather than to the setting.
+
+    Sets the chat id and asserts BOTH that health reports it and that a parked
+    job actually produces a push — so the flag cannot drift away from the code
+    the way a hand-maintained status field does.
+    """
+    import app.services.notify.wecom_notify as wn
+    from tests.test_mandatory_review import DEMO_TEXT, _get_customer_id, _wait_for_job
+
+    calls = []
+    monkeypatch.setattr(wn, "notify", lambda *a, **kw: calls.append(kw))
+    monkeypatch.setattr(wn.settings, "wecom_ops_chat_id", "ops-chat-123")
+
+    assert client.get("/api/health").json()["wecom_ops_chat_id_is_set"] is True
+
+    r = client.post(
+        "/api/v1/intake/submit",
+        json={
+            "customer_id": _get_customer_id(client, admin_headers),
+            "source_type": "text",
+            "raw_text": DEMO_TEXT,
+        },
+        headers=admin_headers,
+    )
+    job = _wait_for_job(client, r.json()["job_id"], admin_headers)
+
+    assert job["status"] == "needs_review"
+    assert [c["template"] for c in calls] == ["intake_needs_review"], (
+        "health said the ping was configured, but no ping went out"
+    )

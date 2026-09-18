@@ -228,6 +228,29 @@ class Settings(BaseSettings):
         )
 
     @property
+    def wecom_ops_chat_id_is_set(self) -> bool:
+        """True when the internal "an order is waiting for review" ping can go out.
+
+        `intake.needs_review` is the ONE notification with no customer on it — it
+        is addressed to the ops group, not to a buyer — and it is the only thing
+        that announces a parked job. With `wecom_ops_chat_id` empty the handler
+        logs one line at INFO and returns: the job is still queued, so nothing is
+        lost, but nobody is told either.
+
+        That is a silent failure by construction. Every extraction stops for
+        review (`intake_require_human_review` defaults True), so the queue this
+        feeds fills on its own, and the only symptom is a list nobody looked at.
+        The handler's own docstring says as much — "without this the queue fills
+        up silently and orders sit unprocessed" — which is exactly what an unset
+        variable produces.
+
+        Reporting it here is the same move as `wecom_gateway_url_is_loopback`:
+        make the invisible configuration visible on the one endpoint that is
+        always read.
+        """
+        return bool((self.wecom_ops_chat_id or "").strip())
+
+    @property
     def mistral_ocr_is_configured(self) -> bool:
         """True when a Mistral key is present AND is not an obvious placeholder.
 
