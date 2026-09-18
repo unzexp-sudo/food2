@@ -32,6 +32,7 @@ const extraZh = {
     master: {
       customers: {
         orderHistory: "订单历史",
+        nameZhRequired: "请输入中文名称",
       },
       products: {
         viewProduct: "查看商品",
@@ -85,6 +86,20 @@ const extraZh = {
       review: {
         verifyTitle: "生成订单前请核对",
         verifyBody: "订单尚未生成。请对照原件核对下方明细，确认后再提交。",
+      },
+      // 绑定客户这道关卡：后端在没有绑定客户前不会生成订单，因此收件箱必须把
+      // 这个状态显示出来，并给出唯一的解决动作。
+      bind: {
+        needsCustomer: "待绑定客户",
+        unboundOnly: "仅看待绑定客户",
+        pendingNeedsCustomer: "{{pending}} 张待审核 · 其中 {{unbound}} 张需先绑定客户",
+        boundTo: "已绑定：{{customer}}",
+        notBound: "尚未绑定客户",
+        notBoundHint:
+          "在把该会话绑定到客户之前，这张单无法生成订单。绑定一次即可释放该会话下所有待处理订单。",
+        chooseCustomer: "选择客户",
+        bindToContinue: "绑定客户后继续",
+        confirmFailed: "无法生成订单",
       },
     },
     warehouse: {
@@ -221,6 +236,10 @@ const extraZh = {
         bindConfirmBody:
           "该会话下所有暂存单据将释放给此客户，并可生成订单。本次操作将记录在你的名下。",
         bindSuccess: "绑定成功，已释放 {{count}} 份暂存单据。",
+        bindFailed: "绑定被拒绝",
+        releasesHint: "绑定一次即可释放该会话下全部 {{count}} 张暂存订单。",
+        pageHint:
+          "绑定该会话后，其暂存订单即可生成订单。系统不会自动绑定，也不会预选匹配结果。",
         safetyNote:
           "系统不会自动绑定，也不会预选匹配结果。绑定可撤销，撤销时会列出所有使用过该绑定的订单。",
       },

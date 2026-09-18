@@ -492,7 +492,13 @@ export default function CustomersPage() {
           >
             <Input />
           </Form.Item>
-          <Form.Item name="name_zh" label={t("pages.master.customers.nameZh")}>
+          <Form.Item
+            name="name_zh"
+            label={t("pages.master.customers.nameZh")}
+            rules={[
+              { required: true, message: t("pages.master.customers.nameZhRequired") },
+            ]}
+          >
             <Input />
           </Form.Item>
           <Form.Item name="type" label={t("pages.master.customers.type")}>

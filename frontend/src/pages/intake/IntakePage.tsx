@@ -23,6 +23,7 @@ import {
   DownloadOutlined,
   EyeOutlined,
   FileOutlined,
+  LinkOutlined,
   ReloadOutlined,
   RollbackOutlined,
   UploadOutlined,
@@ -35,6 +36,7 @@ import { formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 import ConfidenceTag from "../../components/ConfidenceTag";
 import IntakeReviewDrawer from "../../components/intake/IntakeReviewDrawer";
+import BindCustomerDrawer from "../../components/identity/BindCustomerDrawer";
 import client from "../../api/client";
 import { parseStoredUser } from "../../types";
 
@@ -79,7 +81,27 @@ interface IntakeDocWithJob extends IntakeDocument {
   draft_order_id: string | null;
   customer_name_en?: string | null;
   customer_name_zh?: string | null;
+  identity?: DocIdentity | null;
 }
+/**
+ * The conversation's binding state, from `_doc_out`.
+ *
+ * The server refuses to create an order from an unbound conversation, so the
+ * inbox has to be able to see that state — otherwise the only signal is a
+ * banner telling the operator to bind a conversation the list cannot name.
+ */
+interface DocIdentity {
+  status: string | null;
+  chat_key: string | null;
+  kind: string | null;
+  value: string | null;
+  method: string | null;
+  reason: string | null;
+}
+
+/** A document is held when its conversation has no customer binding. */
+const isHeld = (r: IntakeDocWithJob) =>
+  !r.customer_id && r.identity?.status === "unbound";
 interface ExtractionResponse {
   raw_output?: unknown;
   confidence?: number | null;
@@ -102,6 +124,10 @@ export default function IntakePage() {
   // "Parked" view: messages the parser set aside as definitely-not-an-order.
   // Hidden from the inbox by default, so this toggle is the only way in.
   const [parkedOnly, setParkedOnly] = useState(false);
+  // "Needs a customer" view: held rows, which nobody can finish until the
+  // conversation is bound. Filtered SERVER-side — doing it in the browser would
+  // hide every match on the pages that were not fetched and quietly lie.
+  const [unboundOnly, setUnboundOnly] = useState(false);
 
   const params = useMemo(
     () => ({
@@ -113,8 +139,9 @@ export default function IntakePage() {
       ...(statusFilter ? { status: statusFilter } : {}),
       ...(pendingOnly ? { status: "needs_review" } : {}),
       ...(parkedOnly ? { status: "parked" } : {}),
+      ...(unboundOnly ? { unbound_only: true } : {}),
     }),
-    [customerFilter, sourceFilter, statusFilter, pendingOnly, parkedOnly],
+    [customerFilter, sourceFilter, statusFilter, pendingOnly, parkedOnly, unboundOnly],
   );
 
   const list = useList<IntakeDocWithJob>("/intake/documents", params);
@@ -125,16 +152,19 @@ export default function IntakePage() {
   // a wrongly-parked message is an invisible lost order.
   const [pendingCount, setPendingCount] = useState<number | null>(null);
   const [parkedCount, setParkedCount] = useState<number | null>(null);
+  const [unboundCount, setUnboundCount] = useState<number | null>(null);
   const refreshPendingCount = useCallback(() => {
     api
-      .get<{ pending_review: number; parked?: number }>("/intake/review-count")
+      .get<{ pending_review: number; parked?: number; unbound?: number }>("/intake/review-count")
       .then((r) => {
         setPendingCount(r.pending_review);
         setParkedCount(r.parked ?? 0);
+        setUnboundCount(r.unbound ?? null);
       })
       .catch(() => {
         setPendingCount(null);
         setParkedCount(null);
+        setUnboundCount(null);
       });
   }, []);
   useEffect(() => {
@@ -173,10 +203,28 @@ export default function IntakePage() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewJobId, setReviewJobId] = useState<string | null>(null);
   const [reviewFileUrl, setReviewFileUrl] = useState<string | null>(null);
+  // The document currently open in the review drawer, so the drawer can show
+  // its binding state and offer to clear it.
+  const [reviewDoc, setReviewDoc] = useState<IntakeDocWithJob | null>(null);
 
-  const openReview = (jobId: string, fileUrl?: string | null) => {
-    setReviewJobId(jobId);
-    setReviewFileUrl(fileUrl ?? null);
+  // Bind-customer drawer state. `resumeJobId` remembers a confirm the operator
+  // asked for and could not have: binding is the step that unblocks it, so on
+  // success we finish the job they actually started instead of making them
+  // click again.
+  const [bindOpen, setBindOpen] = useState(false);
+  const [bindTarget, setBindTarget] = useState<IntakeDocWithJob | null>(null);
+  const [resumeJobId, setResumeJobId] = useState<string | null>(null);
+
+  const openBindFor = (r: IntakeDocWithJob, resume?: string | null) => {
+    setBindTarget(r);
+    setResumeJobId(resume ?? null);
+    setBindOpen(true);
+  };
+
+  const openReview = (r: IntakeDocWithJob) => {
+    setReviewDoc(r);
+    setReviewJobId(r.job_id ?? "");
+    setReviewFileUrl(r.file_url);
     setReviewOpen(true);
   };
 
@@ -356,8 +404,32 @@ export default function IntakePage() {
     {
       title: t("pages.intake.colCustomer"),
       key: "customer",
-      render: (_: unknown, r: IntakeDocWithJob) =>
-        r.customer_id ? pickName(lang, r.customer_name_en, r.customer_name_zh) : "—",
+      width: 190,
+      render: (_: unknown, r: IntakeDocWithJob) => {
+        if (r.customer_id) {
+          // `pickName` yields "" when both names are missing. That is a data
+          // fault, not "no customer", so fall back rather than showing a blank
+          // that reads as unbound.
+          return pickName(lang, r.customer_name_en, r.customer_name_zh) || "—";
+        }
+        // A held row is a TASK, not missing data. Putting the action here is
+        // what stops the operator opening the draft, clicking Confirm and
+        // reading a toast telling them to go somewhere else.
+        if (canMutate && isHeld(r)) {
+          return (
+            <Button
+              size="small"
+              type="link"
+              icon={<LinkOutlined />}
+              style={{ paddingLeft: 0 }}
+              onClick={() => openBindFor(r)}
+            >
+              {t("pages.intake.bind.needsCustomer")}
+            </Button>
+          );
+        }
+        return "—";
+      },
     },
     {
       title: t("pages.intake.colUploadedBy"),
@@ -421,7 +493,7 @@ export default function IntakePage() {
               size="small"
               type="primary"
               icon={<EyeOutlined />}
-              onClick={() => openReview(r.job_id!, r.file_url)}
+              onClick={() => openReview(r)}
             >
               {t("pages.intake.review.title")}
             </Button>
@@ -513,18 +585,47 @@ export default function IntakePage() {
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
-          message={t("pages.intake.pendingBanner", { count: pendingCount })}
-          description={t("pages.intake.reviewHint")}
+          // "17 waiting for review" is true and useless when all 17 are held:
+          // it reads as a busy queue when it is a BLOCKED one, with a single
+          // action behind it. Say which it is.
+          message={
+            unboundCount
+              ? t("pages.intake.bind.pendingNeedsCustomer", {
+                  pending: pendingCount,
+                  unbound: unboundCount,
+                })
+              : t("pages.intake.pendingBanner", { count: pendingCount })
+          }
+          description={
+            unboundCount
+              ? t("pages.intake.bind.notBoundHint")
+              : t("pages.intake.reviewHint")
+          }
           action={
-            <Button
-              size="small"
-              onClick={() => {
-                setPendingOnly((v) => !v);
-                setParkedOnly(false);
-              }}
-            >
-              {pendingOnly ? t("pages.intake.showAll") : t("pages.intake.pendingOnly")}
-            </Button>
+            <Space direction="vertical" size={4}>
+              <Button
+                size="small"
+                onClick={() => {
+                  setPendingOnly((v) => !v);
+                  setParkedOnly(false);
+                }}
+              >
+                {pendingOnly ? t("pages.intake.showAll") : t("pages.intake.pendingOnly")}
+              </Button>
+              {unboundCount ? (
+                <Button
+                  size="small"
+                  type={unboundOnly ? "primary" : "default"}
+                  onClick={() => {
+                    setUnboundOnly((v) => !v);
+                    setParkedOnly(false);
+                    list.setPage(1);
+                  }}
+                >
+                  {t("pages.intake.bind.unboundOnly")}
+                </Button>
+              ) : null}
+            </Space>
           }
         />
       ) : null}
@@ -703,10 +804,48 @@ export default function IntakePage() {
         jobId={reviewJobId ?? ""}
         fileUrl={reviewFileUrl}
         canConfirm={canMutate}
+        held={reviewDoc ? isHeld(reviewDoc) : false}
+        customerLabel={
+          reviewDoc?.customer_id
+            ? pickName(lang, reviewDoc.customer_name_en, reviewDoc.customer_name_zh)
+            : null
+        }
+        onChooseCustomer={() => {
+          // Carry the job id through: the operator asked to create this order,
+          // so once the conversation is bound we finish it for them.
+          if (reviewDoc) openBindFor(reviewDoc, reviewJobId);
+        }}
         onClose={() => setReviewOpen(false)}
         onConfirmed={() => {
+          setReviewOpen(false);
           list.refresh();
           refreshPendingCount();
+        }}
+      />
+
+      <BindCustomerDrawer
+        open={bindOpen}
+        kind={bindTarget?.identity?.kind ?? null}
+        value={bindTarget?.identity?.value ?? null}
+        chatKey={bindTarget?.identity?.chat_key ?? null}
+        onClose={() => setBindOpen(false)}
+        onBound={async () => {
+          // Reflect the release first, then finish the confirm the operator
+          // actually asked for — binding is the step that unblocks it, not a
+          // detour that costs them a second click.
+          list.refresh();
+          refreshPendingCount();
+          const job = resumeJobId;
+          setResumeJobId(null);
+          if (!job) return;
+          await run(() => api.post(`/intake/jobs/${job}/confirm-review`), {
+            success: t("pages.intake.review.confirmed"),
+            onSuccess: () => {
+              setReviewOpen(false);
+              list.refresh();
+              refreshPendingCount();
+            },
+          });
         }}
       />
     </Card>

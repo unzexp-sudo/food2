@@ -36,6 +36,9 @@ const extra = {
     master: {
       customers: {
         orderHistory: "Order history",
+        // The API requires name_zh (`CustomerCreate`); the form did not, so it
+        // submitted happily and the backend answered with a bare 422.
+        nameZhRequired: "Chinese name is required",
       },
       products: {
         viewProduct: "View Product",
@@ -100,6 +103,23 @@ const extra = {
         verifyTitle: "Check this before it becomes an order",
         verifyBody:
           "No order exists yet. Compare the lines below against the original, then confirm.",
+      },
+      // The binding gate. The server refuses to create an order from an unbound
+      // conversation, so the inbox must make that state visible and offer the
+      // one action that clears it. A dead "—" in the Customer column is how the
+      // operator ends up clicking Confirm and reading a toast that vanishes.
+      bind: {
+        needsCustomer: "Needs customer",
+        unboundOnly: "Needs a customer only",
+        pendingNeedsCustomer:
+          "{{pending}} order(s) waiting for review · {{unbound}} need a customer first",
+        boundTo: "Bound to {{customer}}",
+        notBound: "Not bound to a customer",
+        notBoundHint:
+          "This order cannot be created until the conversation is bound to a customer. One binding releases every order waiting on this conversation.",
+        chooseCustomer: "Choose customer",
+        bindToContinue: "Bind customer to continue",
+        confirmFailed: "Could not create the order",
       },
     },
     warehouse: {
@@ -247,6 +267,11 @@ const extra = {
         bindConfirmBody:
           "Every held document from this conversation is released to this customer and can become an order. The decision is recorded against your name.",
         bindSuccess: "Bound. {{count}} held document(s) released.",
+        bindFailed: "The bind was refused",
+        releasesHint:
+          "One binding releases all {{count}} order(s) held for this conversation.",
+        pageHint:
+          "Binding this conversation lets its held orders become orders. Nothing is bound automatically and no match is pre-selected.",
         safetyNote:
           "Nothing is bound automatically and no match is pre-selected. A binding is reversible, and reversing it lists every order that used it.",
       },

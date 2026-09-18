@@ -1,8 +1,16 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Drawer, Space, Table, Tag, Typography } from "antd";
-import { CheckOutlined, WarningOutlined } from "@ant-design/icons";
+import {
+  Alert,
+  App as AntdApp,
+  Button,
+  Drawer,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from "antd";
+import { CheckOutlined, LinkOutlined, WarningOutlined } from "@ant-design/icons";
 import { api, getApiError } from "../../api/client";
-import { useMutate } from "../../api/hooks";
 import { useLanguage } from "../../i18n";
 import ConfidenceTag from "../ConfidenceTag";
 import StatusTag from "../StatusTag";
@@ -39,6 +47,12 @@ interface Props {
   jobId: string;
   fileUrl?: string | null;
   canConfirm: boolean;
+  /** The conversation has no customer, so no order can be created yet. */
+  held?: boolean;
+  /** The bound customer's name, when there is one. */
+  customerLabel?: string | null;
+  /** Open the bind step. The caller owns that drawer. */
+  onChooseCustomer?: () => void;
   onClose: () => void;
   onConfirmed?: () => void;
 }
@@ -49,21 +63,31 @@ interface Props {
  * every flagged/cancelled line, and exposes a single explicit "Confirm &
  * submit" action. The pipeline NEVER auto-submits — only a person clicking
  * this button creates the order.
+ *
+ * It also owns the FIRST question a reviewer hits: does this conversation even
+ * have a customer? The server refuses to create an order without one, so this
+ * screen states the binding up front and, when it is missing, turns Confirm
+ * into the step that fixes it rather than a button that can only fail.
  */
 export default function IntakeReviewDrawer({
   open,
   jobId,
   fileUrl,
   canConfirm,
+  held = false,
+  customerLabel = null,
+  onChooseCustomer,
   onClose,
   onConfirmed,
 }: Props) {
   const { t } = useLanguage();
+  const { message } = AntdApp.useApp();
   const [data, setData] = useState<ExtractionPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [imgError, setImgError] = useState(false);
-  const { loading: confirming, run } = useMutate();
+  const [confirming, setConfirming] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -71,6 +95,7 @@ export default function IntakeReviewDrawer({
     setError(null);
     setData(null);
     setImgError(false);
+    setConfirmError(null);
     api
       .get<ExtractionPayload>(`/intake/extractions/${jobId}`)
       .then((res) => setData(res))
@@ -90,16 +115,28 @@ export default function IntakeReviewDrawer({
     raw.ocr_overall_confidence < 0.95;
 
   const handleConfirm = async () => {
-    await run(
-      () => api.post(`/intake/jobs/${jobId}/confirm-review`),
-      {
-        success: t("pages.intake.review.confirmed"),
-        onSuccess: () => {
-          onConfirmed?.();
-          onClose();
-        },
-      },
-    );
+    // A held conversation cannot produce an order and the server will say so.
+    // Offer the step that unblocks it instead of an error to decode: the
+    // operator asked to create this order, so take them to the one thing
+    // standing in the way rather than to a dead end.
+    if (held) {
+      onChooseCustomer?.();
+      return;
+    }
+    setConfirmError(null);
+    setConfirming(true);
+    try {
+      await api.post(`/intake/jobs/${jobId}/confirm-review`);
+      message.success(t("pages.intake.review.confirmed"));
+      onConfirmed?.();
+      onClose();
+    } catch (err) {
+      // Inline, not a toast: a refusal here is something the operator has to
+      // act on, and a toast that vanishes takes the reason with it.
+      setConfirmError(getApiError(err) ?? t("common.error"));
+    } finally {
+      setConfirming(false);
+    }
   };
 
   const columns = [
@@ -158,17 +195,27 @@ export default function IntakeReviewDrawer({
       onClose={onClose}
       width={840}
       footer={
-        <Space style={{ float: "right" }}>
-          <Button onClick={onClose}>{t("common.cancel")}</Button>
-          <Button
-            type="primary"
-            icon={<CheckOutlined />}
-            loading={confirming}
-            disabled={!canConfirm}
-            onClick={handleConfirm}
-          >
-            {t("pages.intake.review.confirm")}
-          </Button>
+        <Space direction="vertical" style={{ width: "100%" }} size={8}>
+          {/* The refusal, where the button is — not a toast at the top of a
+              screen the operator has already looked away from. */}
+          {confirmError ? <Alert type="error" showIcon message={confirmError} /> : null}
+          <Space style={{ width: "100%", justifyContent: "flex-end" }}>
+            <Button onClick={onClose}>{t("common.cancel")}</Button>
+            <Button
+              type="primary"
+              icon={held ? <LinkOutlined /> : <CheckOutlined />}
+              loading={confirming}
+              disabled={!canConfirm}
+              onClick={handleConfirm}
+            >
+              {/* When the conversation has no customer this button cannot
+                  succeed, so it must not pretend to. It still does something:
+                  it opens the one step that unblocks the order. */}
+              {held
+                ? t("pages.intake.bind.bindToContinue")
+                : t("pages.intake.review.confirm")}
+            </Button>
+          </Space>
         </Space>
       }
     >
@@ -178,6 +225,35 @@ export default function IntakeReviewDrawer({
         <Alert type="error" message={error} showIcon />
       ) : raw ? (
         <Space direction="vertical" style={{ width: "100%" }} size="middle">
+          {/* The gate, stated first. Without it the reviewer only discovers the
+              missing customer by clicking Confirm and reading a refusal. */}
+          {held ? (
+            <Alert
+              type="warning"
+              showIcon
+              message={t("pages.intake.bind.notBound")}
+              description={t("pages.intake.bind.notBoundHint")}
+              action={
+                onChooseCustomer ? (
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<LinkOutlined />}
+                    onClick={onChooseCustomer}
+                  >
+                    {t("pages.intake.bind.chooseCustomer")}
+                  </Button>
+                ) : null
+              }
+            />
+          ) : customerLabel ? (
+            <Alert
+              type="success"
+              showIcon
+              message={t("pages.intake.bind.boundTo", { customer: customerLabel })}
+            />
+          ) : null}
+
           <Space wrap>
             <StatusTag domain="intake" value="needs_review" />
             <Typography.Text strong>
