@@ -2,7 +2,12 @@
 
 - MockExtractor: deterministic, offline — parses text/excel/csv/pdf/image into
   raw lines {product_name, quantity, unit, notes}. This is the tested path and
-  the demo provider (no API key needed).
+  the demo provider (no API key needed). For an IMAGE or a scanned PDF it does
+  not read the document at all; it returns canned lines and flags them.
+- MistralOcrExtractor: real OCR for images + scanned PDFs via Mistral's
+  document AI endpoint. Reads the page, returns markdown, parsed by the same
+  line parser the typed-text path uses.
+- AliyunQwenExtractor: two-stage Aliyun OCR -> Qwen-VL structuring.
 - OpenAIExtractor: stub that would call settings.openai_base_url with the model.
   Since no key is configured in the demo, it falls back to MockExtractor output
   with a parser_notes note. Tests use mock only.
@@ -919,11 +924,221 @@ class AliyunQwenExtractor:
         return out
 
 
+# --- Mistral OCR (document AI) ------------------------------------------------
+
+# Magic bytes -> media type for the `data:` URI we hand to Mistral. Same lesson
+# as the gateway's attachment naming: the filename is a claim, the bytes are the
+# fact. It matters more here, because the media type is part of the request —
+# a PNG announced as image/jpeg is a rejected call, not a mislabelled file.
+_IMAGE_MEDIA_TYPES: tuple[tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"BM", "image/bmp"),
+)
+
+_EXT_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".webp": "image/webp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".avif": "image/avif",
+}
+
+
+def _media_type_for(content: bytes, filename: str | None = None) -> str:
+    """Decide the media type of an image from its bytes, then its name.
+
+    Mistral accepts AVIF and TIFF as well, so the extension fallback is broader
+    than the sniff table — but the sniff table wins whenever it matches.
+    """
+    for magic, mime in _IMAGE_MEDIA_TYPES:
+        if content.startswith(magic):
+            return mime
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    suffix = Path(filename or "").suffix.lower()
+    return _EXT_MEDIA_TYPES.get(suffix, "image/jpeg")
+
+
+class MistralOcrExtractor:
+    """Reads a photo or a scanned PDF with Mistral's document AI endpoint.
+
+    One call returns the page as markdown, which is then run through the SAME
+    line parser the typed-text path uses — so a note Mistral reads becomes the
+    same `RawLine` list a typed message produces, and everything downstream
+    (SKU matching, the review gate, the draft order) is unchanged.
+
+    Deliberately NOT a fallback chain. If the call fails, this raises: the
+    intake job is marked `failed` with the reason, which is visible. Falling
+    back to `mock_ocr_lines()` on error would recreate the exact failure this
+    codebase already paid for once — a document nobody read that looks read.
+    """
+
+    def extract(
+        self,
+        *,
+        source_type: str,
+        raw_text: str | None = None,
+        file_path: str | None = None,
+        original_filename: str | None = None,
+    ) -> ExtractionResult:
+        # Only images and scanned PDFs need OCR. Typed text, email bodies and
+        # spreadsheets are genuinely parsed by the deterministic extractor, and
+        # paying a vision model to read a spreadsheet is waste, not accuracy.
+        if source_type not in ("image", "pdf") or not file_path:
+            return MockExtractor().extract(
+                source_type=source_type,
+                raw_text=raw_text,
+                file_path=file_path,
+                original_filename=original_filename,
+            )
+
+        if source_type == "pdf":
+            # A PDF with a text layer is already machine-readable: pypdf gives
+            # us the characters exactly, for free. Only a PDF with NO text layer
+            # (a scan, i.e. photographs of paper) is worth sending to OCR.
+            _, note = parse_pdf_lines(file_path)
+            if note != "scanned_pdf_no_text":
+                return MockExtractor().extract(
+                    source_type=source_type,
+                    raw_text=raw_text,
+                    file_path=file_path,
+                    original_filename=original_filename,
+                )
+
+        if not (settings.mistral_api_key or "").strip():
+            raise RuntimeError(
+                "ai_provider=mistral but ERP_MISTRAL_API_KEY is empty — refusing "
+                "to fall back to the mock OCR, which would invent line items"
+            )
+
+        with open(file_path, "rb") as f:
+            content = f.read()
+        if not content:
+            raise RuntimeError(f"attachment is empty, nothing to OCR: {file_path}")
+
+        b64 = base64.b64encode(content).decode("ascii")
+        if source_type == "image":
+            chunk: dict[str, Any] = {
+                "type": "image_url",
+                "image_url": f"data:{_media_type_for(content, original_filename)};base64,{b64}",
+            }
+        else:
+            chunk = {
+                "type": "document_url",
+                "document_url": f"data:application/pdf;base64,{b64}",
+            }
+            if original_filename:
+                # Optional, but it makes the vendor-side logs and any error
+                # message name the document instead of a wall of base64.
+                chunk["document_name"] = original_filename
+
+        markdown, confidence, pages, degraded = self._ocr(chunk)
+
+        notes = [f"mistral {settings.mistral_ocr_model} pages={pages}"]
+        if degraded:
+            notes.append(degraded)
+
+        lines: list[RawLine] = []
+        structured: dict | None = None
+        doc_type = "ocr_image" if source_type == "image" else "ocr_pdf"
+
+        # Same dispatch order as the text path: a recognized supplier-order
+        # table keeps its header + sub-customer breakdowns.
+        struct = _structured_for(markdown)
+        if struct is not None:
+            lines = _structured_to_raw_lines(struct)
+            structured = struct
+            doc_type = "supplier_order_table"
+            notes.append(f"structured_order lines={len(lines)}")
+        else:
+            lines = parse_text_lines(markdown)
+            notes.append(f"ocr_lines={len(lines)}")
+
+        if confidence is not None:
+            for ln in lines:
+                ln.confidence = confidence
+                ln.field_confidences = {
+                    k: confidence
+                    for k in ("product_name", "quantity", "unit", "unit_price", "amount")
+                }
+
+        return apply_review_gate(ExtractionResult(
+            lines=lines,
+            parser_notes="; ".join(notes),
+            doc_type=doc_type,
+            structured=structured,
+            overall_confidence=confidence,
+            image_path=file_path if source_type == "image" else None,
+        ))
+
+    def _ocr(self, chunk: dict) -> tuple[str, float | None, int, str]:
+        """POST one document to Mistral. Returns (markdown, confidence, pages, note).
+
+        `confidence` is None when the deployment will not return scores — and
+        the review gate reads None as "unverified" and flags the document, so
+        that degradation fails safe rather than silently approving.
+        """
+        import httpx
+
+        url = f"{settings.mistral_base_url.rstrip('/')}/ocr"
+        headers = {
+            "Authorization": f"Bearer {settings.mistral_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict[str, Any] = {
+            "model": settings.mistral_ocr_model,
+            "document": chunk,
+            # We want the text. Images and bounding boxes would inflate the
+            # response (and the invoice) for something nothing here reads.
+            "include_image_base64": False,
+            "include_blocks": False,
+        }
+
+        resp = httpx.post(
+            url,
+            headers=headers,
+            json={**payload, "confidence_scores_granularity": "page"},
+            timeout=120,
+        )
+        degraded = ""
+        # `confidence_scores_granularity` is an optional request field. If this
+        # deployment rejects it, retry once without it rather than failing an
+        # intake over a nice-to-have — and say so in the notes.
+        if resp.status_code == 400:
+            resp = httpx.post(url, headers=headers, json=payload, timeout=120)
+            degraded = "confidence scores unavailable (retried without)"
+        resp.raise_for_status()
+        data = resp.json()
+
+        pages = data.get("pages") or []
+        markdown = "\n".join((p.get("markdown") or "") for p in pages)
+        scores = [
+            (p.get("confidence_scores") or {}).get("average_page_confidence_score")
+            for p in pages
+        ]
+        vals = [float(s) for s in scores if isinstance(s, (int, float))]
+        confidence = round(sum(vals) / len(vals), 4) if vals else None
+        return markdown, confidence, len(pages), degraded
+
+
 def get_extractor():
     """Factory: returns MockExtractor when settings.ai_provider == 'mock'."""
     provider = (settings.ai_provider or "mock").lower()
     if provider == "openai" and settings.openai_api_key:
         return OpenAIExtractor()
+    if provider == "mistral":
+        if not (settings.mistral_api_key or "").strip():
+            raise RuntimeError(
+                "ai_provider=mistral but credentials missing: set ERP_MISTRAL_API_KEY"
+            )
+        return MistralOcrExtractor()
     if provider == "aliyun_qwen":
         if not (
             settings.aliyun_access_key_id

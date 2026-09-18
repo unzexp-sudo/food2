@@ -118,14 +118,41 @@ def test_health_reports_that_photos_are_not_really_being_read(client, monkeypatc
 
 def test_health_clears_the_flag_once_a_real_vision_provider_is_set(client, monkeypatch):
     """Guards against a warning that can never be silenced — that kind gets
-    ignored, and then it protects nothing."""
+    ignored, and then it protects nothing.
+
+    Note this requires the credentials to be present as well as the provider
+    name. A real provider that is *selected but unkeyed* reads no photos either,
+    so it does not clear the flag — see the test below.
+    """
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "ai_provider", "aliyun_qwen")
+    monkeypatch.setattr(settings, "aliyun_access_key_id", "key-id")
+    monkeypatch.setattr(settings, "aliyun_access_key_secret", "key-secret")
+    monkeypatch.setattr(settings, "qwen_api_key", "qwen-key")
     body = client.get("/api/health").json()
 
     assert body["ai_provider"] == "aliyun_qwen"
     assert body["image_extraction_is_simulated"] is False
+
+
+def test_health_keeps_warning_when_a_real_provider_has_no_credentials(client, monkeypatch):
+    """The flag answers "is a photo actually being read?", not "is the provider
+    name a real one?".
+
+    A provider selected without credentials is the most likely misconfiguration
+    there is — it is the exact state between "I chose Mistral" and "I pasted the
+    key". Reporting it as healthy would put the lie in the one place an operator
+    goes to find out.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ai_provider", "mistral")
+    monkeypatch.setattr(settings, "mistral_api_key", "")
+    assert client.get("/api/health").json()["image_extraction_is_simulated"] is True
+
+    monkeypatch.setattr(settings, "mistral_api_key", "sk-live")
+    assert client.get("/api/health").json()["image_extraction_is_simulated"] is False
 
 
 def test_openai_counts_as_simulated_because_it_is_a_stub():
@@ -136,8 +163,22 @@ def test_openai_counts_as_simulated_because_it_is_a_stub():
 
     assert Settings(ai_provider="openai").image_extraction_is_simulated is True
     assert Settings(ai_provider="").image_extraction_is_simulated is True
-    assert Settings(ai_provider="aliyun_qwen").image_extraction_is_simulated is False
     assert Settings(ai_provider="MOCK").image_extraction_is_simulated is True
+    # A real provider clears the flag only once it can actually read a photo.
+    assert Settings(ai_provider="aliyun_qwen").image_extraction_is_simulated is True
+    assert Settings(
+        ai_provider="aliyun_qwen",
+        aliyun_access_key_id="id",
+        aliyun_access_key_secret="secret",
+        qwen_api_key="key",
+    ).image_extraction_is_simulated is False
+    assert Settings(ai_provider="mistral").image_extraction_is_simulated is True
+    assert Settings(
+        ai_provider="mistral", mistral_api_key="sk-live"
+    ).image_extraction_is_simulated is False
+    # An unrecognised provider falls back to the mock extractor in the factory,
+    # so it is simulated by definition rather than by accident.
+    assert Settings(ai_provider="gpt5-turbo-max").image_extraction_is_simulated is True
 
 
 def test_the_mock_image_path_really_does_return_canned_lines(tmp_path):

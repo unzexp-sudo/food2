@@ -59,7 +59,8 @@ class Settings(BaseSettings):
     # File storage
     files_dir: str = str(BACKEND_DIR / "data" / "files")
 
-    # AI intake: "mock" (deterministic, offline) or "openai" or "aliyun_qwen"
+    # AI intake: "mock" (deterministic, offline), "mistral", "aliyun_qwen" or
+    # "openai" (a stub — selecting it changes nothing, see OpenAIExtractor).
     ai_provider: str = "mock"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
@@ -82,6 +83,17 @@ class Settings(BaseSettings):
     qwen_model: str = "qwen-vl-max"
     # Cheaper/faster model used only for the cheap form-type classifier call.
     qwen_form_type_model: str = "qwen-vl-plus"
+
+    # --- Mistral OCR (document AI) — photos + scanned PDFs ---------------------
+    # Used by MistralOcrExtractor. One call reads a page and returns markdown,
+    # which is then parsed by the same line parser the typed-text path uses.
+    # https://docs.mistral.ai/capabilities/document_ai/basic_ocr/
+    # Create a key at https://console.mistral.ai/ -> API keys.
+    mistral_api_key: str = ""
+    mistral_base_url: str = "https://api.mistral.ai/v1"
+    # The documented alias that tracks the newest OCR model. Pin a dated
+    # snapshot (e.g. "mistral-ocr-2512") once the output has been validated.
+    mistral_ocr_model: str = "mistral-ocr-latest"
 
     # --- OCR quality-assurance gates ------------------------------------------
     # A per-field confidence below this is treated as a hard flag (the field is
@@ -204,7 +216,7 @@ class Settings(BaseSettings):
 
     @property
     def image_extraction_is_simulated(self) -> bool:
-        """True when photos and scanned PDFs would be read by the FAKE extractor.
+        """True when photos and scanned PDFs would NOT be really read.
 
         The `mock` provider is deterministic and offline, which is right for
         tests — but for an `image` or a scanned PDF it does not parse anything.
@@ -220,8 +232,30 @@ class Settings(BaseSettings):
         `openai` counts as simulated too: `OpenAIExtractor` is a stub that
         delegates to the mock extractor and appends a note, so selecting it
         changes nothing.
+
+        A REAL provider that is selected but not configured also counts. The
+        distinction matters: `mistral` with no API key does not silently become
+        the mock (the factory refuses to build the extractor), but from the
+        outside the effect is the same — no photo is being read. Reporting
+        `false` there would be a lie in exactly the situation the flag exists
+        for, so this checks credentials rather than trusting the provider name.
+        It stays a pure string comparison: this runs on the healthcheck path,
+        which must not do I/O.
         """
-        return (self.ai_provider or "mock").strip().lower() in ("", "mock", "openai")
+        provider = (self.ai_provider or "mock").strip().lower()
+        if provider in ("", "mock", "openai"):
+            return True
+        if provider == "mistral":
+            return not (self.mistral_api_key or "").strip()
+        if provider == "aliyun_qwen":
+            return not (
+                (self.aliyun_access_key_id or "").strip()
+                and (self.aliyun_access_key_secret or "").strip()
+                and (self.qwen_api_key or "").strip()
+            )
+        # An unrecognised provider name falls through to MockExtractor in
+        # `get_extractor()`, so it is simulated by definition.
+        return True
 
     def files_path(self, *parts: str) -> Path:
         """Absolute path under the files dir; ensures directories exist."""
