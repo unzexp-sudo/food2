@@ -286,7 +286,7 @@ function MappingsTab() {
   const refresh = () => {
     setLoading(true);
     api
-      .get<Page<Mapping>>("/product-wholesaler-mappings", { page: 1, page_size: 200 })
+      .get<Page<Mapping>>("/product-wholesaler-mappings", { page: 1, page_size: 100 })
       .then((r) => setItems(r.items))
       .catch(() => setItems([]))
       .finally(() => setLoading(false));
@@ -294,7 +294,7 @@ function MappingsTab() {
 
   useEffect(() => {
     refresh();
-    api.get<Page<Product>>("/products", { page: 1, page_size: 200 }).then((r) => setProducts(r.items)).catch(() => setProducts([]));
+    api.get<Page<Product>>("/products", { page: 1, page_size: 100 }).then((r) => setProducts(r.items)).catch(() => setProducts([]));
     api.get<Page<Wholesaler>>("/wholesalers", { page: 1, page_size: 100 }).then((r) => setWholesalers(r.items)).catch(() => setWholesalers([]));
   }, []);
 
@@ -486,7 +486,7 @@ function RulesTab() {
   const refresh = () => {
     setLoading(true);
     api
-      .get<Page<SupplierRule>>("/supplier-rules", { page: 1, page_size: 200 })
+      .get<Page<SupplierRule>>("/supplier-rules", { page: 1, page_size: 100 })
       .then((r) => setItems(r.items))
       .catch(() => setItems([]))
       .finally(() => setLoading(false));
@@ -494,7 +494,7 @@ function RulesTab() {
 
   useEffect(() => {
     refresh();
-    api.get<Page<Product>>("/products", { page: 1, page_size: 200 }).then((r) => setProducts(r.items)).catch(() => setProducts([]));
+    api.get<Page<Product>>("/products", { page: 1, page_size: 100 }).then((r) => setProducts(r.items)).catch(() => setProducts([]));
     api.get<Page<Category>>("/product-categories", { page: 1, page_size: 100 }).then((r) => setCategories(r.items)).catch(() => setCategories([]));
     api.get<Page<Wholesaler>>("/wholesalers", { page: 1, page_size: 100 }).then((r) => setWholesalers(r.items)).catch(() => setWholesalers([]));
   }, []);

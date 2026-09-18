@@ -578,6 +578,7 @@ const zh = {
         payNote: "备注",
         payAmountRequired: "请输入金额",
         payAmountPositive: "金额必须大于 0",
+        noInvoiceableOrders: "暂无可开票的订单——需先完成配送。",
         paymentSuccess: "付款已登记",
         noLines: "暂无明细。",
       },

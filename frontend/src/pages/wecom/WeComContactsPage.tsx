@@ -44,7 +44,7 @@ export default function WeComContactsPage() {
   const [customers, setCustomers] = useState<ErpCustomer[]>([]);
   useEffect(() => {
     api
-      .get<Page<ErpCustomer>>("/customers", { page: 1, page_size: 200 })
+      .get<Page<ErpCustomer>>("/customers", { page: 1, page_size: 100 })
       .then((res) => setCustomers(res.items))
       .catch(() => setCustomers([]));
   }, []);

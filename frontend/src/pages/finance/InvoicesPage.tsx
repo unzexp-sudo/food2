@@ -95,7 +95,16 @@ export default function InvoicesPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   useEffect(() => {
     api.get<Page<Customer>>("/customers", { page: 1, page_size: 100 }).then((r) => setCustomers(r.items)).catch(() => setCustomers([]));
-    api.get<Page<Order>>("/orders", { page: 1, page_size: 200 }).then((r) => setOrders(r.items)).catch(() => setOrders([]));
+    // Only a `fulfilled` order can be invoiced: `generate_invoice` bills the
+    // delivered quantities and refuses an order that has none
+    // ("No delivered quantities to invoice for this order"). Offering the whole
+    // order list meant every option but a handful produced a 400 toast. The
+    // filter is server-side, because a client-side one would only ever see the
+    // page it happened to be handed.
+    api
+      .get<Page<Order>>("/orders", { page: 1, page_size: 100, status: "fulfilled" })
+      .then((r) => setOrders(r.items))
+      .catch(() => setOrders([]));
   }, []);
 
   // Detail drawer
@@ -114,16 +123,26 @@ export default function InvoicesPage() {
   // Generate-invoice modal
   const [genOpen, setGenOpen] = useState(false);
   const [orderId, setOrderId] = useState<string | undefined>();
+  const [orderError, setOrderError] = useState<string | null>(null);
   const { loading: mutateLoading, run } = useMutate();
 
   const handleGenerate = async () => {
-    if (!orderId) return;
+    // The `required` rule on the picker's Form.Item is inert: that Form.Item has
+    // no `name`, so AntD never registers the Select as a field and the rule
+    // never runs. Without this guard, Submit with nothing chosen silently did
+    // nothing at all — no message, no request, no close.
+    if (!orderId) {
+      setOrderError(t("pages.finance.invoices.orderRequired"));
+      return;
+    }
+    setOrderError(null);
     const ok = await run(() => api.post("/invoices/generate", { order_id: orderId }), {
       success: t("pages.finance.invoices.generateSuccess"),
     });
     if (ok) {
       setGenOpen(false);
       setOrderId(undefined);
+      setOrderError(null);
       list.refresh();
     }
   };
@@ -292,7 +311,15 @@ export default function InvoicesPage() {
     <Card
       title={t("pages.finance.invoices.title")}
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setGenOpen(true)}>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => {
+            setOrderId(undefined);
+            setOrderError(null);
+            setGenOpen(true);
+          }}
+        >
           {t("pages.finance.invoices.newInvoice")}
         </Button>
       }
@@ -428,22 +455,34 @@ export default function InvoicesPage() {
         okText={t("common.submit")}
       >
         <Form layout="vertical">
+          {/* No `name`, so `rules` here would be inert — the check lives in
+              `handleGenerate` and is surfaced through validateStatus/help. */}
           <Form.Item
             label={t("pages.finance.invoices.selectOrder")}
             required
-            rules={[{ required: true, message: t("pages.finance.invoices.orderRequired") }]}
+            validateStatus={orderError ? "error" : undefined}
+            help={
+              orderError ??
+              (orders.length === 0
+                ? t("pages.finance.invoices.noInvoiceableOrders")
+                : undefined)
+            }
           >
             <Select
               showSearch
               placeholder={t("pages.finance.invoices.selectOrder")}
               style={{ width: "100%" }}
               value={orderId}
-              onChange={setOrderId}
+              onChange={(v) => {
+                setOrderId(v);
+                setOrderError(null);
+              }}
               options={orders.map((o) => ({
                 value: o.id,
                 label: `${o.order_number} · ${pickName(lang, o.customer_name_en, o.customer_name_zh)}`,
               }))}
               optionFilterProp="label"
+              notFoundContent={t("pages.finance.invoices.noInvoiceableOrders")}
             />
           </Form.Item>
         </Form>

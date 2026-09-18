@@ -85,7 +85,7 @@ function PricesTab() {
   const [units, setUnits] = useState<Unit[]>([]);
   useEffect(() => {
     api.get<Page<Customer>>("/customers", { page: 1, page_size: 100 }).then((r) => setCustomers(r.items)).catch(() => setCustomers([]));
-    api.get<Page<Product>>("/products", { page: 1, page_size: 200 }).then((r) => setProducts(r.items)).catch(() => setProducts([]));
+    api.get<Page<Product>>("/products", { page: 1, page_size: 100 }).then((r) => setProducts(r.items)).catch(() => setProducts([]));
     api.get<Page<Unit>>("/units", { page: 1, page_size: 50 }).then((r) => setUnits(r.items)).catch(() => setUnits([]));
   }, []);
 
@@ -353,7 +353,7 @@ function StandingTab() {
   const [units, setUnits] = useState<Unit[]>([]);
   useEffect(() => {
     api.get<Page<Customer>>("/customers", { page: 1, page_size: 100 }).then((r) => setCustomers(r.items)).catch(() => setCustomers([]));
-    api.get<Page<Product>>("/products", { page: 1, page_size: 200 }).then((r) => setProducts(r.items)).catch(() => setProducts([]));
+    api.get<Page<Product>>("/products", { page: 1, page_size: 100 }).then((r) => setProducts(r.items)).catch(() => setProducts([]));
     api.get<Page<Unit>>("/units", { page: 1, page_size: 50 }).then((r) => setUnits(r.items)).catch(() => setUnits([]));
   }, []);
 

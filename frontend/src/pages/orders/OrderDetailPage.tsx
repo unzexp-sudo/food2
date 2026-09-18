@@ -76,6 +76,18 @@ interface Order {
   delivery_contact_phone: string | null;
   delivery_confirmed_at: string | null;
   delivery_confirmed_by: string | null;
+  // The delivery leg. `out_for_delivery` is a Delivery status, not an order
+  // status, so the timeline cannot show the truck leaving without this.
+  delivery: {
+    id: string;
+    delivery_number: string;
+    status: string;
+    driver_id: string | null;
+    scheduled_date: string | null;
+    picked_at: string | null;
+    out_at: string | null;
+    delivered_at: string | null;
+  } | null;
   line_count: number;
   created_at: string;
   lines?: OrderLine[];
@@ -150,7 +162,7 @@ export default function OrderDetailPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
   useEffect(() => {
-    api.get<Page<Product>>("/products", { page: 1, page_size: 200 }).then((r) => setProducts(r.items)).catch(() => setProducts([]));
+    api.get<Page<Product>>("/products", { page: 1, page_size: 100 }).then((r) => setProducts(r.items)).catch(() => setProducts([]));
     api.get<Page<Unit>>("/units", { page: 1, page_size: 50 }).then((r) => setUnits(r.items)).catch(() => setUnits([]));
   }, []);
 

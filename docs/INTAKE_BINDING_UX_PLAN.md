@@ -260,6 +260,17 @@ it.
 Deliverable: a short list of confirmed instances, each with the fix, so the principle is
 applied consistently rather than one page at a time.
 
+**Found while closing this — a related failure, and worse than the one S4 describes.** Every
+paginated endpoint caps `page_size` at `le=100`, and **13 frontend calls asked for `200`**. Each
+was a guaranteed **422**, and each was swallowed by `.catch(() => setX([]))`, so the control
+rendered as an ordinary **empty picker — for every user, always**. The invoice order picker was
+the visible casualty: its fetch had never once succeeded, so "Generate invoice" could not be
+used at all. (`clamp_page` does not rescue this — it runs *after* the `Query` validator.) All 13
+now ask for 100; it was found by reading the backend access log, not the UI.
+
+> An enabled action that fails is bad. A control that renders a *failed request* as valid
+> emptiness is worse, because there is nothing for anyone to notice.
+
 ---
 
 ## 4. Additional defect to fix in S2

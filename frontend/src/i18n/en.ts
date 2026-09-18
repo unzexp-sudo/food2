@@ -578,6 +578,8 @@ const en = {
         payNote: "Note",
         payAmountRequired: "Amount is required",
         payAmountPositive: "Amount must be greater than 0",
+        noInvoiceableOrders:
+          "No orders are ready to invoice — delivery must be completed first.",
         paymentSuccess: "Payment recorded",
         noLines: "No lines.",
       },

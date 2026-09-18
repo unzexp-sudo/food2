@@ -54,7 +54,7 @@ export default function InventoryPage() {
   const [products, setProducts] = useState<Product[]>([]);
   useEffect(() => {
     api
-      .get<Page<Product>>("/products", { page: 1, page_size: 200 })
+      .get<Page<Product>>("/products", { page: 1, page_size: 100 })
       .then((r) => setProducts(r.items))
       .catch(() => setProducts([]));
   }, []);
