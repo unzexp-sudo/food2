@@ -176,6 +176,33 @@ class Settings(BaseSettings):
         return (self.wecom_gateway_key or "").strip() == (default or "").strip()
 
     @property
+    def wecom_gateway_url_is_loopback(self) -> bool:
+        """True while outbound notifications are being posted into our OWN container.
+
+        The default is `http://127.0.0.1:8100` — which is the *gateway's* port,
+        not ours. On a laptop running both services that happens to work, so the
+        default is invisible in development and fatal in production: the ERP is
+        its own container, nothing listens on 8100 there, and every customer
+        message dies with a connection refused.
+
+        That failure is completely silent from the ERP's side. `notify()` catches
+        it, logs a warning nobody reads, and returns — so the order confirms
+        normally, the customer hears nothing, and there is no error anywhere in
+        the product to explain it. Worse, it is the *default*, so a deployment
+        that simply never set the variable looks identical to one that set it
+        wrong.
+
+        A loopback host is never a valid production destination for a service in
+        another container, so this is a hard tell rather than a heuristic.
+        """
+        host = (self.wecom_gateway_url or "").strip().lower()
+        return (
+            host.startswith("http://127.0.0.1")
+            or host.startswith("http://localhost")
+            or host.startswith("http://[::1]")
+        )
+
+    @property
     def image_extraction_is_simulated(self) -> bool:
         """True when photos and scanned PDFs would be read by the FAKE extractor.
 

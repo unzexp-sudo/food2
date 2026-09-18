@@ -174,6 +174,15 @@ def health():
         "app": settings.app_name,
         "service_key_is_default": settings.service_key_is_default,
         "wecom_gateway_key_is_default": settings.wecom_gateway_key_is_default,
+        # Outbound customer messaging. `wecom_gateway_url` is not a secret — it
+        # is a public hostname — and printing it is the whole point: the default
+        # is the GATEWAY's loopback, so an ERP container that never overrode it
+        # posts every customer notification to itself and gets a connection
+        # refused. That is invisible from every other surface in the product, and
+        # the only symptom is "the customer says nobody texted them".
+        "notify_enabled": settings.notify_enabled,
+        "wecom_gateway_url": settings.wecom_gateway_url,
+        "wecom_gateway_url_is_loopback": settings.wecom_gateway_url_is_loopback,
         # Not a secret, but the same class of invisible config: under the
         # default `mock` provider a photo or a scanned PDF is not read at all —
         # it yields canned demo lines. See `image_extraction_is_simulated`.

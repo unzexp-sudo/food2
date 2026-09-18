@@ -47,6 +47,58 @@ def test_default_check_reads_the_default_off_the_model():
     assert Settings(service_key="something-else").service_key_is_default is False
 
 
+# ---------------------------------------------------------------------------
+# Outbound notification routing
+# ---------------------------------------------------------------------------
+#
+# `WECOM_GATEWAY_URL` defaults to the GATEWAY's loopback port. On a laptop
+# running both services that works, so the default is invisible in development
+# and fatal in production: the ERP is its own container, nothing listens on
+# 8100 there, and every customer message dies with a connection refused that
+# `notify()` deliberately swallows. The only symptom is "the customer says
+# nobody texted them", which is why the value has to be readable from outside.
+
+
+def test_health_reports_where_outbound_notifications_actually_go(client):
+    body = client.get("/api/health").json()
+    from app.core.config import settings
+
+    assert body["wecom_gateway_url"] == settings.wecom_gateway_url
+    assert body["notify_enabled"] == settings.notify_enabled
+    assert "wecom_gateway_url_is_loopback" in body
+
+
+def test_health_flags_the_loopback_default_as_a_misconfiguration():
+    """The shipped default must read as broken, not as fine."""
+    from app.core.config import Settings
+
+    default = Settings.model_fields["wecom_gateway_url"].default
+    assert Settings(wecom_gateway_url=default).wecom_gateway_url_is_loopback is True
+
+
+def test_the_loopback_flag_clears_for_every_real_host():
+    """A flag that cannot be cleared on a correct deployment gets ignored.
+
+    Also covers the shapes that look like a real URL but are not one.
+    """
+    from app.core.config import Settings
+
+    for host in (
+        "https://wecom1-production-4bc1.up.railway.app",
+        "http://gateway.internal:8100",
+        "https://wecom.example.com/gateway",
+    ):
+        assert Settings(wecom_gateway_url=host).wecom_gateway_url_is_loopback is False
+
+    for loopback in (
+        "http://127.0.0.1:8100",
+        "http://localhost:8100",
+        "http://LOCALHOST:8100",
+        "http://[::1]:8100",
+    ):
+        assert Settings(wecom_gateway_url=loopback).wecom_gateway_url_is_loopback is True
+
+
 def test_health_reports_that_photos_are_not_really_being_read(client, monkeypatch):
     """The `mock` provider does not read an image — it returns three canned
     lines that happen to be plausible products for this business.
