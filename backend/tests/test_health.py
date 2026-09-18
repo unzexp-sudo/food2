@@ -167,3 +167,77 @@ def test_the_mock_image_path_really_does_return_canned_lines(tmp_path):
     from app.ai.adapters import apply_review_gate
 
     assert apply_review_gate(first).requires_human_review is True
+
+
+def test_a_scanned_pdf_is_flagged_because_nobody_read_it(tmp_path, monkeypatch):
+    """A scanned PDF has no text layer, so the mock provider fabricates lines for
+    it exactly as it does for an image — same hazard, same guard.
+
+    `parse_pdf_lines` is what detects the missing text layer, so it is the seam to
+    stub: this asserts the flag, not pypdf's PDF handling.
+    """
+    from app.ai import adapters
+    from app.ai.adapters import MockExtractor
+
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    monkeypatch.setattr(
+        adapters, "parse_pdf_lines", lambda p: ([], "scanned_pdf_no_text")
+    )
+
+    res = MockExtractor().extract(source_type="pdf", file_path=str(pdf))
+
+    assert res.requires_human_review is True, (
+        "a scanned PDF was never read — it must not be able to auto-approve"
+    )
+    assert [l.product_name for l in res.lines] == ["土豆", "大白菜", "五花肉"]
+    assert "mock OCR" in res.parser_notes
+
+
+def test_a_real_parse_clears_the_fabricated_flag(tmp_path, monkeypatch):
+    """The flag must clear once the lines come from a genuine parse, or real
+    documents get parked as unread — which is its own kind of failure, and the
+    reason the flag is scoped rather than blanket."""
+    import sys
+    import types
+
+    from app.ai import adapters
+    from app.ai.adapters import MockExtractor
+
+    pdf = tmp_path / "order.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    # The text layer is missing, so the canned fallback fires first...
+    monkeypatch.setattr(
+        adapters, "parse_pdf_lines", lambda p: ([], "scanned_pdf_no_text")
+    )
+
+    # ...but the document does carry an order table, so the structured parser
+    # replaces the canned lines. pypdf is stubbed because all that is needed from
+    # it is some text to hand to the structured parser.
+    class _Page:
+        def extract_text(self):
+            return "任务数 1 广东誉元 采购单位"
+
+    fake_pypdf = types.ModuleType("pypdf")
+    fake_pypdf.PdfReader = lambda path: types.SimpleNamespace(pages=[_Page()])
+    monkeypatch.setitem(sys.modules, "pypdf", fake_pypdf)
+
+    monkeypatch.setattr(
+        adapters,
+        "_structured_for",
+        lambda text: {
+            "variant": "A",
+            "lines": [{"product_name": "土豆", "total_quantity": 50, "total_unit": "斤"}],
+        },
+    )
+
+    res = MockExtractor().extract(source_type="pdf", file_path=str(pdf))
+
+    assert [l.product_name for l in res.lines] == ["土豆"], (
+        "the structured parse should have replaced the canned lines"
+    )
+    assert res.requires_human_review is False, (
+        "the document was genuinely parsed — it must not be parked as unread"
+    )
