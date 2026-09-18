@@ -139,6 +139,7 @@ def set_status_endpoint(
     # Drivers can only update their own deliveries.
     if actor.role == "driver" and d.driver_id != actor.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your delivery")
+    previous_status = d.status
     try:
         delivery_svc.set_status(db, delivery=d, status=payload.status, actor=actor)
     except ValueError as exc:
@@ -146,7 +147,11 @@ def set_status_endpoint(
     db.commit()
     # Outbound WeCom notification (docs/WECOM_CONTRACTS.md §11) — the ERP's
     # "out_for_delivery" status is the contract's "delivering/in_transit".
-    if d.status == "out_for_delivery":
+    # Emit on the *transition* only: the endpoint is idempotent in the DB (the
+    # status is just re-set) but a driver tapping the button twice would text
+    # the customer twice, and "your order is on its way" repeated reads as a
+    # second dispatch.
+    if d.status == "out_for_delivery" and previous_status != "out_for_delivery":
         emit("delivery.dispatched", db=db, delivery=d)
     return delivery_svc.serialize_delivery(db, d)
 

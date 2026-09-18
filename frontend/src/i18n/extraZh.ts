@@ -66,9 +66,12 @@ const extraZh = {
         pendingConfirmation: "待确认",
         confirmed: "已确认",
         consolidated: "已合并",
+        outForDelivery: "配送中",
         fulfilled: "已履约",
         invoiced: "已开票",
         needsClarification: "需澄清",
+        rejected: "此订单已被拒绝，不会再有后续处理。",
+        noDeliveryRecord: "该订单没有配送记录。",
       },
     },
     intake: {

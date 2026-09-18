@@ -77,9 +77,12 @@ const extra = {
         pendingConfirmation: "Pending confirmation",
         confirmed: "Confirmed",
         consolidated: "Consolidated",
+        outForDelivery: "Out for delivery",
         fulfilled: "Fulfilled",
         invoiced: "Invoiced",
         needsClarification: "Needs clarification",
+        rejected: "This order was rejected. Nothing further will happen to it.",
+        noDeliveryRecord: "No delivery was recorded for this order.",
       },
     },
     intake: {

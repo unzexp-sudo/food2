@@ -70,6 +70,54 @@ def _customer_locale(db: Session, customer_id: str | None) -> str:
     return _DEFAULT_LOCALE
 
 
+def _record(
+    *,
+    template: str,
+    customer_id: str | None,
+    order_id: str | None,
+    chat_id: str | None,
+    result: dict,
+) -> None:
+    """Leave a trace of the attempt in the audit trail. Never raises.
+
+    Every caller of `notify()` drops its return value, so a send that failed or
+    was skipped leaves no evidence anywhere in the ERP — and when the gateway
+    itself is down, the gateway's own log does not exist either. A row here is
+    what turns "the customer never got a message" from a guess into a lookup:
+    System → Audit, filtered on entity type `Notification`.
+
+    Uses its own session on purpose. These handlers run from `emit()`, which the
+    endpoints call *after* `db.commit()`, and the request session is then closed
+    without another commit — a row added to `db` would be flushed and thrown away.
+    """
+    try:
+        from app.core.audit import log_audit
+        from app.core.database import SessionLocal
+
+        status = str(result.get("status") or "unknown")
+        detail = result.get("error") or result.get("reason")
+        with SessionLocal() as audit_db:
+            log_audit(
+                audit_db,
+                None,
+                "Notification",
+                order_id or customer_id or chat_id or "system",
+                "send",
+                after={
+                    "template": template,
+                    "status": status,
+                    "order_id": order_id,
+                    "customer_id": customer_id,
+                    "chat_id": chat_id,
+                    "detail": detail,
+                },
+                summary=f"{template} -> {status}" + (f": {detail}" if detail else ""),
+            )
+            audit_db.commit()
+    except Exception:  # noqa: BLE001 — a broken audit write must not break an order
+        logger.debug("Could not record notify(%s) outcome", template, exc_info=True)
+
+
 def notify(
     db: Session,
     *,
@@ -92,8 +140,39 @@ def notify(
       {"status": "sent",    "response": {...}}     gateway accepted
       {"status": "failed",  "error": "..."}        gateway unreachable or rejected
 
-    Never raises.
+    Never raises. Every attempt — including a failure — is written to the audit
+    trail by `_record`, because the caller always discards this return value.
     """
+    result = _send(
+        db,
+        template=template,
+        customer_id=customer_id,
+        payload=payload,
+        order_id=order_id,
+        locale=locale,
+        chat_id=chat_id,
+    )
+    _record(
+        template=template,
+        customer_id=customer_id,
+        order_id=order_id,
+        chat_id=chat_id,
+        result=result,
+    )
+    return result
+
+
+def _send(
+    db: Session,
+    *,
+    template: str,
+    customer_id: str | None,
+    payload: dict,
+    order_id: str | None = None,
+    locale: str = "zh",
+    chat_id: str | None = None,
+) -> dict:
+    """The actual gateway call. See `notify` for the contract."""
     try:
         if not settings.notify_enabled:
             return {"status": "disabled"}

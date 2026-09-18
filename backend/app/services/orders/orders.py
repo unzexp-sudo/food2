@@ -17,6 +17,7 @@ from app.core.numbers import next_number
 from app.models import (
     ContractPrice,
     Customer,
+    Delivery,
     Order,
     OrderLine,
     Product,
@@ -50,7 +51,45 @@ def _order_line_out(ln: OrderLine, *, product: Product | None = None,
     }
 
 
-def _order_out(db: Session, o: Order, *, include_lines: bool = True) -> dict:
+def _delivery_out(db: Session, order_id: str) -> dict | None:
+    """The order's delivery leg, or None when it has not been generated yet.
+
+    `out_for_delivery` is a *Delivery* status, not an order status — the order
+    pipeline has no stage for it — so a reader looking at an order cannot tell
+    that the goods are on a truck unless we hand them this. Without it the
+    timeline jumps `consolidated → fulfilled` and the "out for delivery"
+    message the customer receives has no visible counterpart in the ERP.
+
+    Latest row wins: re-generating a delivery for a later date must not leave
+    the timeline showing the old one.
+    """
+    d = (
+        db.query(Delivery)
+        .filter(Delivery.order_id == order_id)
+        .order_by(Delivery.created_at.desc())
+        .first()
+    )
+    if d is None:
+        return None
+    return {
+        "id": d.id,
+        "delivery_number": d.delivery_number,
+        "status": d.status,
+        "driver_id": d.driver_id,
+        "scheduled_date": d.scheduled_date.isoformat() if d.scheduled_date else None,
+        "picked_at": d.picked_at.isoformat() if d.picked_at else None,
+        "out_at": d.out_at.isoformat() if d.out_at else None,
+        "delivered_at": d.delivered_at.isoformat() if d.delivered_at else None,
+    }
+
+
+def _order_out(
+    db: Session,
+    o: Order,
+    *,
+    include_lines: bool = True,
+    include_delivery: bool = False,
+) -> dict:
     customer = db.get(Customer, o.customer_id)
     lines_out: list[dict] = []
     if include_lines:
@@ -103,6 +142,9 @@ def _order_out(db: Session, o: Order, *, include_lines: bool = True) -> dict:
         "delivery_confirmed_by": o.delivery_confirmed_by,
         "line_count": len(lines_out) if include_lines else _count_lines(db, o.id),
         "created_at": o.created_at.isoformat() if o.created_at else None,
+        # Only the detail view asks for this — the list view would pay one extra
+        # query per row for a field it never renders.
+        "delivery": _delivery_out(db, o.id) if include_delivery else None,
         "lines": lines_out,
     }
 
@@ -161,7 +203,7 @@ def get_order(db: Session, order_id: str) -> Order | None:
 
 
 def serialize_order(db: Session, o: Order) -> dict:
-    return _order_out(db, o, include_lines=True)
+    return _order_out(db, o, include_lines=True, include_delivery=True)
 
 
 # --- Create -------------------------------------------------------------------
