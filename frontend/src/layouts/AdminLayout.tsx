@@ -35,6 +35,7 @@ import { useLanguage, type Lang } from "../i18n";
 import { useThemeMode } from "../theme-context";
 import { parseStoredUser, type CurrentUser, type Role } from "../types";
 import { api } from "../api/client";
+import ConfigWarnings from "../components/ConfigWarnings";
 
 const { Header, Sider, Content } = Layout;
 
@@ -311,6 +312,12 @@ export default function AdminLayout() {
           />
         </Sider>
         <Content style={{ padding: 16, overflow: "auto" }}>
+          {/* Server-configuration warnings, above the page rather than inside
+              one, because they are not about the screen you are on. Shown to
+              admin and ops: ops is who feels an unannounced review queue, and
+              admin is who can change the variables. Not dismissible — see the
+              component. */}
+          {(user.role === "admin" || user.role === "ops") && <ConfigWarnings />}
           <Suspense fallback={<RouteFallback />}>
             <Outlet />
           </Suspense>

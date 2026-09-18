@@ -17,6 +17,20 @@ const extraZh = {
       rejected: "已驳回",
     },
   },
+  // 服务端配置告警。这些事实服务端已经在 /api/health 上如实报告了，
+  // 放到界面上才是「有人会看见」与「只是存在一个字段」的区别。
+  // 每句话的结尾正好接变量名（由组件拼接），变量名因此只有一处，
+  // 不会和读取它的代码走散。
+  configWarnings: {
+    title: "{{count}} 项服务端配置有问题 — 部分功能处于关闭状态",
+    loopbackGateway:
+      "客户通知被发往 ERP 自己的容器，客户永远收不到消息，而且不会报任何错。请设置",
+    noOpsChat: "订单进入待审核时没有人收到提醒，积压的订单无人处理。请设置",
+    simulatedOcr: "图片和扫描版 PDF 并未被真正识别 — 提取器返回的是演示数据。请设置",
+    defaultServiceKey: "入库服务密钥仍是本仓库中公开的默认值。请更换",
+    defaultGatewayKey: "ERP 与网关之间的密钥仍是公开的默认值。请更换",
+    notifyOff: "对客户的外发通知已关闭。请开启",
+  },
   pages: {
     dashboard: {
       needsAttention: "待处理事项",

@@ -22,6 +22,24 @@ const extra = {
       rejected: "Rejected",
     },
   },
+  // Server-configuration warnings. Every one of these is a fact the SERVER
+  // already reports on /api/health; showing them here is the difference between
+  // "a flag exists" and "somebody will see it". Each sentence ends where the
+  // variable name goes — the component appends it, so the names stay in one
+  // place and cannot drift from the code that reads them.
+  configWarnings: {
+    title: "{{count}} server configuration problem(s) — some features are switched off",
+    loopbackGateway:
+      "Customer notifications are being sent to the ERP's own container, so no customer is ever texted and nothing errors. Set",
+    noOpsChat:
+      "Nobody is told when an order is waiting for review, so parked orders sit unnoticed. Set",
+    simulatedOcr:
+      "Photos and scanned PDFs are not being read — the extractor returns demo lines instead. Set",
+    defaultServiceKey:
+      "The intake service key is still the value published in this repository. Rotate",
+    defaultGatewayKey: "The ERP-to-gateway secret is still the published default. Rotate",
+    notifyOff: "Outbound customer notifications are switched off. Turn on",
+  },
   pages: {
     dashboard: {
       needsAttention: "Needs your attention",
