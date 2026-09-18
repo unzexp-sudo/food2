@@ -14,6 +14,14 @@ const extra = {
     generate: "Generate",
     preview: "Preview",
   },
+  status: {
+    intake: {
+      // A HUMAN refused this extraction. Deliberately not folded into `failed`
+      // (the machine never got that far) or `parked` (an automated guess) — the
+      // difference is who decided, and that decides whether it needs a look.
+      rejected: "Rejected",
+    },
+  },
   pages: {
     dashboard: {
       needsAttention: "Needs your attention",
@@ -109,6 +117,62 @@ const extra = {
         verifyTitle: "Check this before it becomes an order",
         verifyBody:
           "No order exists yet. Compare the lines below against the original, then confirm.",
+        // --- Seeing the source --------------------------------------------
+        // "No preview image for this source type" used to be shown for every
+        // document, photos included: the source was pointed at with an <img>,
+        // which sends no Authorization header, so the request 401'd and the
+        // image errored. A message about the source type, caused by auth.
+        expand: "Expand",
+        collapse: "Collapse",
+        expandHint:
+          "Widen this screen so the original and the lines can be read together",
+        zoomHint: "Click the image to zoom and rotate it",
+        openInNewTab: "Open in a new tab",
+        noSource: "The original could not be loaded.",
+        noSourceText: "No text was stored for this document.",
+        noInlinePreview:
+          "This file type cannot be shown inline — download it to check the order.",
+        previewFailed: "The original could not be shown",
+        // --- Correcting the lines -----------------------------------------
+        pickProduct: "Pick a product",
+        notInCatalog: "not in the catalog",
+        unmatched: "No match",
+        edited: "Edited",
+        editedHint:
+          "You changed this line, so the extractor's confidence no longer describes it.",
+        customerCancelled: "Cancelled on the note",
+        addLine: "Add line",
+        removeLine: "Remove this line",
+        undoRemove: "Put this line back",
+        resetEdits: "Reset my changes",
+        addedLine: "The added line",
+        lineNo: "Line {{line}}",
+        nothingToOrder: "Every line has been removed — there is nothing to order.",
+        productRequired: "{{where}} has no product.",
+        qtyRequired:
+          "{{where}} has a quantity of 0. Give it a quantity, or remove the line.",
+        editsApplied:
+          "Your changes are sent with the confirm. The original extraction is kept exactly as the machine read it.",
+        // --- Refusing it ---------------------------------------------------
+        reject: "Reject",
+        rejectTitle: "Reject this order",
+        rejectBody:
+          "No order will be created. The message and the extracted lines are both kept, so this decision can be checked later.",
+        rejectReasonLabel: "Reason",
+        rejectNote: "Note",
+        rejectNotePlaceholder:
+          "What happened? This is what the next person will read.",
+        rejectNoteRequired: 'A note is required when the reason is "other".',
+        rejectConfirm: "Reject order",
+        rejected: "Order rejected",
+        wasRejected: "Rejected: {{reason}}",
+        rejectReason: {
+          duplicate: "Duplicate — this order already exists",
+          not_an_order: "Not an order",
+          wrong_customer: "Wrong customer",
+          unreadable: "Cannot be read",
+          other: "Other",
+        },
       },
       // The binding gate. The server refuses to create an order from an unbound
       // conversation, so the inbox must make that state visible and offer the

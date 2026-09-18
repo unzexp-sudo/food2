@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.ai.adapters import FORM_TYPES, get_extractor
 from app.ai.matching import match_product, match_unit
@@ -207,6 +208,11 @@ def process_intake_job(db: Session, job_id: str) -> None:
             "lines": [
                 {
                     "raw_text": ln["raw_text"],
+                    # The name as the customer wrote it. Stored so a reviewer's
+                    # correction can be re-matched from the original wording
+                    # instead of from a name that has already been normalised
+                    # once — re-matching a match drifts.
+                    "product_name": ln["product_name"],
                     "matched_product_id": ln["matched_product_id"],
                     "matched_product_name": ln["matched_product_name"],
                     "quantity": ln["quantity"],
@@ -396,7 +402,223 @@ def _create_draft_order(
     return order
 
 
-def confirm_intake_review(db: Session, job_id: str, *, actor=None) -> Order:
+def _apply_review_edits(
+    raw_lines: list[dict[str, Any]],
+    edits: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Fold a reviewer's corrections into an extraction's line list.
+
+    Returns `(proposal, summary)`. A proposal line is
+    `{line_no, product_name, quantity, unit, raw_text, edited, match}` — the
+    shape *before* SKU matching. `edited` is False for a line the reviewer left
+    alone, and `match` then carries the ORIGINAL match so an untouched line goes
+    to the order with the confidence the extractor actually reported, rather
+    than a number re-derived from a round trip.
+
+    Corrections are addressed by 1-based `line_no`, matching the numbers the
+    review screen shows. An edit naming a line that is not there is a hard error
+    rather than a silent no-op: it means the drawer and the server disagree
+    about the line set, and applying the rest would produce an order nobody
+    actually reviewed.
+
+    A quantity of zero is refused for the same reason. `0` is not a small order,
+    it is a missing number — and it is exactly what a mis-tapped field produces.
+    The reviewer has two honest ways out, and the message names both.
+    """
+    edits = edits or {}
+    line_edits = list(edits.get("lines") or [])
+    added = list(edits.get("added_lines") or [])
+
+    by_no: dict[int, dict[str, Any]] = {}
+    for e in line_edits:
+        no = e.get("line_no")
+        if not isinstance(no, int) or isinstance(no, bool):
+            raise ValueError("Each line correction needs an integer line_no")
+        if no in by_no:
+            raise ValueError(f"Line {no} was corrected twice")
+        if no < 1 or no > len(raw_lines):
+            raise ValueError(
+                f"Line {no} is not in this extraction — it has "
+                f"{len(raw_lines)} line(s). Reopen the review and try again."
+            )
+        by_no[no] = e
+
+    proposal: list[dict[str, Any]] = []
+    corrected: list[dict[str, Any]] = []
+    # Kept apart on purpose. "The customer struck this line out" and "the
+    # reviewer dropped it" are different events with different meanings, and an
+    # audit trail that merges them cannot answer either question.
+    note_cancelled: list[int] = []
+    reviewer_removed: list[int] = []
+
+    for i, rl in enumerate(raw_lines, start=1):
+        edit = by_no.get(i) or {}
+        cancelled_on_note = bool(rl.get("cancelled"))
+        if bool(edit.get("cancelled", cancelled_on_note)):
+            (note_cancelled if cancelled_on_note else reviewer_removed).append(i)
+            continue
+
+        # `product_name` is the name as the customer wrote it, which is what
+        # re-matching needs. Rows written before it was stored fall back to the
+        # matched name — re-matching a name that already matched is stable.
+        source_name = str(
+            rl.get("product_name")
+            or rl.get("matched_product_name")
+            or rl.get("raw_text")
+            or ""
+        ).strip()
+
+        new_name = edit.get("product_name")
+        name = source_name if new_name is None else str(new_name).strip()
+        new_qty = edit.get("quantity")
+        qty = float(rl.get("quantity") or 0.0) if new_qty is None else float(new_qty)
+        new_unit = edit.get("unit")
+        unit = rl.get("unit") if new_unit is None else new_unit
+
+        touched = (
+            (new_name is not None and str(new_name).strip() != source_name)
+            or (new_qty is not None and float(new_qty) != float(rl.get("quantity") or 0.0))
+            or (new_unit is not None and new_unit != rl.get("unit"))
+        )
+        if touched:
+            delta: dict[str, Any] = {"line_no": i}
+            if new_name is not None and str(new_name).strip() != source_name:
+                delta["product_name"] = {"from": source_name, "to": str(new_name).strip()}
+            if new_qty is not None and float(new_qty) != float(rl.get("quantity") or 0.0):
+                delta["quantity"] = {"from": rl.get("quantity"), "to": new_qty}
+            if new_unit is not None and new_unit != rl.get("unit"):
+                delta["unit"] = {"from": rl.get("unit"), "to": new_unit}
+            corrected.append(delta)
+
+        proposal.append({
+            "line_no": i,
+            "product_name": name,
+            "quantity": qty,
+            "unit": unit,
+            "raw_text": rl.get("raw_text") or "",
+            "edited": touched,
+            "match": None if touched else {
+                "product_id": rl.get("matched_product_id"),
+                "product_display": rl.get("matched_product_name") or name,
+                "unit_id": rl.get("unit_id"),
+                "confidence": rl.get("confidence"),
+                "match_method": rl.get("match_method"),
+            },
+        })
+
+    # Lines the extractor never saw. They continue the numbering, so the order
+    # reads in the sequence the reviewer built instead of with a gap where the
+    # missing line was.
+    next_no = len(proposal)
+    added_summary: list[dict[str, Any]] = []
+    for a in added:
+        name = str(a.get("product_name") or "").strip()
+        if not name:
+            raise ValueError("An added line needs a product name")
+        next_no += 1
+        qty = float(a.get("quantity") or 0.0)
+        proposal.append({
+            "line_no": next_no,
+            "product_name": name,
+            "quantity": qty,
+            "unit": a.get("unit"),
+            "raw_text": "",
+            "edited": True,
+            "match": None,
+        })
+        added_summary.append({"line_no": next_no, "product_name": name, "quantity": qty})
+
+    for ln in proposal:
+        if ln["quantity"] <= 0:
+            raise ValueError(
+                f"Line {ln['line_no']} ({ln['product_name'] or 'no product'}) has a "
+                f"quantity of {ln['quantity']:g} — set a quantity above zero, or "
+                "remove the line."
+            )
+
+    summary = {
+        "corrected": corrected,
+        # The union, so `cancelled_lines_excluded` on the order audit stays a
+        # count of everything that was dropped, from either source.
+        "removed_line_nos": sorted(note_cancelled + reviewer_removed),
+        "cancelled_on_note": note_cancelled,
+        "removed_by_reviewer": reviewer_removed,
+        "added_lines": added_summary,
+    }
+    return proposal, summary
+
+
+def _normalize_proposal(
+    db: Session,
+    proposal: list[dict[str, Any]],
+    *,
+    customer_id: str | None,
+) -> list[dict[str, Any]]:
+    """Match a reviewer-approved line set to the catalog, in one pass.
+
+    Untouched lines keep the match the extractor recorded; corrected and added
+    lines are matched fresh from what the reviewer typed, with
+    `match_method` saying so and no confidence — a person's correction is not a
+    confidence score, and pretending otherwise would put an invented number on
+    the order.
+    """
+    products: list[Product] = (
+        db.query(Product).filter(Product.is_active.is_(True)).all()
+    )
+    aliases: list[CustomerProductAlias] = db.query(CustomerProductAlias).all()
+    units: list[Unit] = db.query(Unit).all()
+
+    out: list[dict[str, Any]] = []
+    for p in proposal:
+        kept = p.get("match")
+        if not p.get("edited") and kept is not None:
+            out.append({
+                "line_no": p["line_no"],
+                "raw_text": p.get("raw_text") or "",
+                "product_id": kept.get("product_id"),
+                "product_display": kept.get("product_display") or p["product_name"],
+                "quantity": p["quantity"],
+                "unit_id": kept.get("unit_id"),
+                "confidence": kept.get("confidence"),
+                "match_method": kept.get("match_method"),
+            })
+            continue
+
+        pmatch = match_product(
+            db,
+            raw_name=p["product_name"],
+            customer_id=customer_id,
+            products=products,
+            aliases=aliases,
+        )
+        matched_prod = (
+            next((x for x in products if x.id == pmatch.product_id), None)
+            if pmatch.product_id
+            else None
+        )
+        umatch = match_unit(
+            db, raw_unit=p.get("unit"), units=units, fallback_product=matched_prod
+        )
+        out.append({
+            "line_no": p["line_no"],
+            "raw_text": p.get("raw_text") or "",
+            "product_id": pmatch.product_id,
+            "product_display": pmatch.product_name or p["product_name"],
+            "quantity": p["quantity"],
+            "unit_id": umatch.unit_id,
+            "confidence": None,
+            "match_method": "human_added" if not p.get("raw_text") else "human_edited",
+        })
+    return out
+
+
+def confirm_intake_review(
+    db: Session,
+    job_id: str,
+    *,
+    actor=None,
+    edits: dict[str, Any] | None = None,
+) -> Order:
     """Human confirms a `needs_review` extraction → create the draft Order.
 
     Called only by the review UI's "Confirm & submit" action. The pipeline
@@ -404,8 +626,23 @@ def confirm_intake_review(db: Session, job_id: str, *, actor=None) -> Order:
     are excluded from the order — the human has already confirmed their removal
     during review, so we must not silently resurrect them.
 
-    Returns the created Order. Raises ValueError if the job isn't awaiting review
-    or has no non-cancelled lines.
+    `edits` carries the reviewer's corrections, as a plain dict (the route
+    dumps its request model into one, so this module never imports the API
+    layer):
+
+        {"lines": [{"line_no": 2, "quantity": 30, "unit": "斤",
+                    "product_name": "大白菜", "cancelled": false}],
+         "added_lines": [{"product_name": "大米", "quantity": 2, "unit": "袋"}]}
+
+    They are applied to the ORDER and never to the stored extraction. The parse
+    is the record of what the machine read; the reviewer's version is a
+    different artefact and is kept separately, on the document and in the audit
+    log. Collapsing the two would destroy the only evidence of how often the
+    extractor is wrong — which is the number that decides whether it is worth
+    trusting at all.
+
+    Returns the created Order. Raises ValueError if the job isn't awaiting review,
+    has no non-cancelled lines, or the edits do not fit the extraction.
     """
     job = db.get(IntakeJob, job_id)
     if job is None:
@@ -433,28 +670,38 @@ def confirm_intake_review(db: Session, job_id: str, *, actor=None) -> Order:
     raw = ext.raw_output or {}
     raw_lines = raw.get("lines", [])
 
-    # Rebuild normalized line dicts from the stored extraction, dropping lines
-    # the customer cancelled (they ride through for human confirmation but must
-    # not become order lines).
-    normalized: list[dict[str, Any]] = []
-    dropped = 0
-    for i, rl in enumerate(raw_lines, start=1):
-        if rl.get("cancelled"):
-            dropped += 1
-            continue
-        normalized.append({
-            "line_no": i,
-            "raw_text": rl.get("raw_text", ""),
-            "product_id": rl.get("matched_product_id"),
-            "product_display": rl.get("matched_product_name"),
-            "quantity": rl.get("quantity") or 0.0,
-            "unit_id": rl.get("unit_id"),
-            "confidence": rl.get("confidence"),
-            "match_method": rl.get("match_method"),
-        })
+    summary: dict[str, Any] = {}
+    if edits:
+        proposal, summary = _apply_review_edits(raw_lines, edits)
+        if not proposal:
+            raise ValueError("No non-cancelled lines to confirm — nothing to order")
+        normalized = _normalize_proposal(
+            db, proposal, customer_id=document.customer_id
+        )
+    else:
+        # The original path, unchanged: rebuild normalized line dicts from the
+        # stored extraction, dropping lines the customer cancelled (they ride
+        # through for human confirmation but must not become order lines).
+        normalized = []
+        dropped = 0
+        for i, rl in enumerate(raw_lines, start=1):
+            if rl.get("cancelled"):
+                dropped += 1
+                continue
+            normalized.append({
+                "line_no": i,
+                "raw_text": rl.get("raw_text", ""),
+                "product_id": rl.get("matched_product_id"),
+                "product_display": rl.get("matched_product_name"),
+                "quantity": rl.get("quantity") or 0.0,
+                "unit_id": rl.get("unit_id"),
+                "confidence": rl.get("confidence"),
+                "match_method": rl.get("match_method"),
+            })
+        summary = {"cancelled_lines_excluded": dropped}
 
-    if not normalized:
-        raise ValueError("No non-cancelled lines to confirm — nothing to order")
+        if not normalized:
+            raise ValueError("No non-cancelled lines to confirm — nothing to order")
 
     overall = float(
         raw.get("ocr_overall_confidence") or raw.get("overall_confidence") or 0.0
@@ -477,10 +724,35 @@ def confirm_intake_review(db: Session, job_id: str, *, actor=None) -> Order:
             "source": "human_review_confirm",
             "intake_document_id": document.id,
             "line_count": len(normalized),
-            "cancelled_lines_excluded": dropped,
+            "cancelled_lines_excluded": summary.get("cancelled_lines_excluded", len(summary.get("removed_line_nos", []))),
         },
         summary=f"Human confirmed intake review → draft order {order.order_number}",
     )
+
+    # Record what the person changed, when they changed anything. This is the
+    # only place the size of the extractor's error is written down, so it is
+    # kept even though it is not needed to build the order.
+    if summary.get("corrected") or summary.get("added_lines") or summary.get("removed_line_nos"):
+        meta = dict(document.document_meta or {})
+        meta["human_review"] = {
+            **summary,
+            "by": actor_id,
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        document.document_meta = meta
+        flag_modified(document, "document_meta")
+        db.flush()
+        log_audit(
+            db, actor, "IntakeJob", job.id, "review_edit",
+            before=None, after=summary,
+            summary=(
+                f"Reviewer corrected intake job {job.id}: "
+                f"{len(summary.get('corrected') or [])} corrected, "
+                f"{len(summary.get('added_lines') or [])} added, "
+                f"{len(summary.get('removed_by_reviewer') or [])} removed"
+            ),
+        )
+
     log_audit(
         db, actor, "IntakeJob", job.id, "review_confirm",
         before={"status": "needs_review"},

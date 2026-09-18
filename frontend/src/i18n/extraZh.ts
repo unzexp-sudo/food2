@@ -10,6 +10,13 @@ const extraZh = {
     generate: "生成",
     preview: "预览",
   },
+  status: {
+    intake: {
+      // 人工驳回，与 `failed`（机器都没跑到）和 `parked`（机器猜的）区分开：
+      // 差别在于「谁做的决定」，而这决定了这行还需不需要人再看一眼。
+      rejected: "已驳回",
+    },
+  },
   pages: {
     dashboard: {
       needsAttention: "待处理事项",
@@ -90,6 +97,55 @@ const extraZh = {
       review: {
         verifyTitle: "生成订单前请核对",
         verifyBody: "订单尚未生成。请对照原件核对下方明细，确认后再提交。",
+        // --- 查看原始单据 --------------------------------------------------
+        // 以前每张单都会显示「该来源类型无预览图片」，图片单也一样：原始件是用
+        // <img> 直接引用的，不会带 Authorization 头，请求 401、图片报错。一条
+        // 说的是来源类型、真正原因却是鉴权的提示。
+        expand: "放大",
+        collapse: "还原",
+        expandHint: "加宽此页面，便于同时查看原始单据与订单明细",
+        zoomHint: "点击图片可缩放、旋转",
+        openInNewTab: "在新标签页打开",
+        noSource: "无法加载原始单据。",
+        noSourceText: "该单据未保存文本内容。",
+        noInlinePreview: "该文件类型无法在页面内预览，请下载后核对。",
+        previewFailed: "无法显示原始单据",
+        // --- 修改明细行 ----------------------------------------------------
+        pickProduct: "选择商品",
+        notInCatalog: "不在商品目录中",
+        unmatched: "未匹配",
+        edited: "已修改",
+        editedHint: "该行由你修改，识别置信度已不适用于此行。",
+        customerCancelled: "单据上已划掉",
+        addLine: "添加明细行",
+        removeLine: "删除此行",
+        undoRemove: "恢复此行",
+        resetEdits: "撤销我的修改",
+        addedLine: "新增行",
+        lineNo: "第 {{line}} 行",
+        nothingToOrder: "所有明细行都已删除，没有可下单的内容。",
+        productRequired: "{{where}}未填写商品。",
+        qtyRequired: "{{where}}数量为 0。请填写数量，或删除该行。",
+        editsApplied:
+          "确认时会一并提交你的修改。原始识别结果按机器读取的内容原样保留。",
+        // --- 驳回 ----------------------------------------------------------
+        reject: "驳回",
+        rejectTitle: "驳回该订单",
+        rejectBody: "不会生成订单。消息与识别结果都会保留，方便日后核查该决定。",
+        rejectReasonLabel: "原因",
+        rejectNote: "备注",
+        rejectNotePlaceholder: "发生了什么？这是下一位同事会看到的内容。",
+        rejectNoteRequired: "原因为「其他」时必须填写备注。",
+        rejectConfirm: "驳回订单",
+        rejected: "订单已驳回",
+        wasRejected: "已驳回：{{reason}}",
+        rejectReason: {
+          duplicate: "重复下单 —— 该订单已存在",
+          not_an_order: "不是订单",
+          wrong_customer: "客户不对",
+          unreadable: "无法识别",
+          other: "其他",
+        },
       },
       // 绑定客户这道关卡：后端在没有绑定客户前不会生成订单，因此收件箱必须把
       // 这个状态显示出来，并给出唯一的解决动作。

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from fastapi import BackgroundTasks
@@ -104,7 +104,13 @@ def _doc_out(
     """
     file_url = f"/api/v1/intake/documents/{doc.id}/file"
     block = identity_block_of(doc)
+    # Why a human threw this away, when one did. Without it the row says
+    # `rejected` and nothing else — and "duplicate" is precisely what the next
+    # person needs to know before they wonder why the customer's order never
+    # arrived and order it again by hand.
+    meta = doc.document_meta or {}
     return {
+        "rejection": meta.get("review_rejection"),
         "id": doc.id,
         "customer_id": doc.customer_id,
         "customer_name_en": customer.name_en if customer else None,
@@ -149,14 +155,39 @@ def _job_out(job: IntakeJob) -> dict:
     }
 
 
-def _extraction_out(ext: IntakeExtraction) -> dict:
-    return {
+def _extraction_out(
+    ext: IntakeExtraction, document: IntakeDocument | None = None
+) -> dict:
+    """Serialize an extraction, optionally with the source it was read from.
+
+    `raw_output` is returned exactly as stored, because it is the immutable
+    record of what the extractor produced. The reviewer's corrections are
+    deliberately NOT folded into it — they live on
+    `document_meta["human_review"]` and are returned alongside — so "what the
+    machine read" and "what a person decided" can never be confused for each
+    other after the fact.
+
+    `document` is optional and adds the SOURCE. The review screen has to show
+    the operator what was actually sent next to what was read out of it, and
+    for a text order the source IS the note. Without it the "Original" column
+    had nothing to render and fell back to "No preview image for this source
+    type" — a true sentence about an image and a useless one about a note.
+    """
+    out = {
         "id": ext.id,
         "job_id": ext.job_id,
         "raw_output": ext.raw_output,
         "overall_confidence": ext.overall_confidence,
         "parser_notes": ext.parser_notes,
     }
+    if document is not None:
+        meta = document.document_meta or {}
+        out["source_type"] = document.source_type
+        out["original_filename"] = document.original_filename
+        out["source_text"] = meta.get("raw_text")
+        out["rejection"] = meta.get("review_rejection")
+        out["human_review"] = meta.get("human_review")
+    return out
 
 
 # --- Submit -------------------------------------------------------------------
@@ -433,6 +464,91 @@ def promote_parked_job(
     )
     if background_tasks is not None:
         background_tasks.add_task(_run_pipeline_task, job.id)
+    return job
+
+
+# --- Reject -------------------------------------------------------------------
+
+# Why an order was thrown away. Fixed codes rather than free text, because a note
+# cannot be counted: "how many duplicates did we get this week?" is a question
+# someone will ask, and the answer has to come out of the data. `duplicate` is
+# first because it is the reason a WeCom order most often must not be created a
+# second time.
+REJECTION_REASONS: tuple[str, ...] = (
+    "duplicate",
+    "not_an_order",
+    "wrong_customer",
+    "unreadable",
+    "other",
+)
+
+
+def reject_job(
+    db: Session,
+    job: IntakeJob,
+    *,
+    reason: str,
+    note: str | None = None,
+    actor: User | None = None,
+) -> IntakeJob:
+    """A human says this extraction must NOT become an order.
+
+    The counterpart to `confirm_intake_review`, and the only other way out of
+    `needs_review`. Without it the queue has no exit but "confirm", so an
+    operator holding a duplicate has to either create the duplicate order or
+    leave the row in the queue forever — and a queue you cannot clear stops
+    being read, which is how a real order gets missed.
+
+    `reason` must be one of `REJECTION_REASONS`. `note` carries the specifics
+    and is REQUIRED for `other`, because "other" with nothing attached records
+    a decision nobody can interpret later.
+
+    Neither the document nor its extraction is touched. The parse is evidence
+    of what the message said; the rejection is a decision *about* it, and the
+    two must stay separable — that is what makes the extraction a usable audit
+    trail. The decision is written to the document's meta and the audit log, so
+    "why is this not an order?" is answerable afterwards.
+    """
+    if job.status != "needs_review":
+        raise ValueError(
+            f"Only jobs awaiting review can be rejected (status is {job.status})"
+        )
+    if reason not in REJECTION_REASONS:
+        raise ValueError(
+            f"Unknown rejection reason {reason!r}; expected one of "
+            f"{', '.join(REJECTION_REASONS)}"
+        )
+    note = (note or "").strip()
+    if reason == "other" and not note:
+        raise ValueError("A note is required when the reason is 'other'")
+
+    before = _job_out(job)
+    job.status = "rejected"
+    job.error = None
+    job.finished_at = datetime.now(timezone.utc)
+    db.flush()
+
+    doc = db.get(IntakeDocument, job.document_id)
+    if doc is not None:
+        meta = dict(doc.document_meta or {})
+        meta["review_rejection"] = {
+            "reason": reason,
+            "note": note or None,
+            "by": getattr(actor, "id", None),
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        doc.document_meta = meta
+        flag_modified(doc, "document_meta")
+        db.flush()
+
+    log_audit(
+        db, actor, "IntakeJob", job.id, "reject",
+        before=before, after=_job_out(job),
+        summary=(
+            f"Intake job {job.id} rejected ({reason})"
+            + (f": {note}" if note else "")
+        ),
+    )
     return job
 
 

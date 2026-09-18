@@ -30,7 +30,12 @@ class IntakeJob(TimestampMixin):
     )
     # `parked` = Gate 1 decided this is not an order, so no pipeline ran. It is
     # terminal but reversible: a human can promote it back to queued.
-    status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)  # queued|processing|completed|failed|needs_review|parked
+    # `rejected` = a HUMAN looked at the extraction and refused it (duplicate,
+    # not an order, unreadable...). Terminal. Deliberately not folded into
+    # `failed` (the machine never got that far) or `parked` (an automated
+    # guess) — the difference is who decided, and it is the difference that
+    # decides whether the row needs a second look.
+    status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)  # queued|processing|completed|failed|needs_review|parked|rejected
     error: Mapped[str | None] = mapped_column(Text)
     retry_count: Mapped[int] = mapped_column(default=0)
     draft_order_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("orders.id"))

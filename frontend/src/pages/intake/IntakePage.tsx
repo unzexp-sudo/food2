@@ -82,6 +82,23 @@ interface IntakeDocWithJob extends IntakeDocument {
   customer_name_en?: string | null;
   customer_name_zh?: string | null;
   identity?: DocIdentity | null;
+  /** Why a human refused this document, when one did. */
+  rejection?: DocRejection | null;
+}
+
+/**
+ * A reviewer's refusal, from `_doc_out`.
+ *
+ * The status tag alone says `rejected` and nothing more, which leaves the one
+ * question anyone will actually ask — "why is this customer's order missing?" —
+ * unanswerable from the screen. `duplicate` is the answer that matters most: it
+ * is what stops the order being placed again by hand.
+ */
+interface DocRejection {
+  reason: string;
+  note?: string | null;
+  by?: string | null;
+  at?: string | null;
 }
 /**
  * The conversation's binding state, from `_doc_out`.
@@ -475,12 +492,26 @@ export default function IntakePage() {
     {
       title: t("pages.intake.colJobStatus"),
       key: "job_status",
-      width: 130,
+      // Wide enough for a rejection reason to read in a line or two. At 130 the
+      // reason wrapped to five lines and every rejected row became a tall,
+      // hard-to-scan block.
+      width: 230,
       render: (_: unknown, r: IntakeDocWithJob) =>
         r.job_status ? (
-          <Space size={4}>
-            <StatusTag domain="intake" value={r.job_status} />
-            {r.job_status === "needs_review" && <Badge status="processing" />}
+          <Space direction="vertical" size={2}>
+            <Space size={4}>
+              <StatusTag domain="intake" value={r.job_status} />
+              {r.job_status === "needs_review" && <Badge status="processing" />}
+            </Space>
+            {/* A rejection is a decision, and a decision with no visible reason
+                is indistinguishable from a mistake. The reason is the whole
+                point of having asked for one. */}
+            {r.job_status === "rejected" && r.rejection ? (
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {t(`pages.intake.review.rejectReason.${r.rejection.reason}`)}
+                {r.rejection.note ? ` — ${r.rejection.note}` : ""}
+              </Typography.Text>
+            ) : null}
           </Space>
         ) : (
           "—"
@@ -590,7 +621,7 @@ export default function IntakePage() {
           setStatusFilter(v);
           list.setPage(1);
         }}
-        options={["queued", "processing", "completed", "failed", "needs_review", "parked"].map((s) => ({
+        options={["queued", "processing", "completed", "failed", "needs_review", "parked", "rejected"].map((s) => ({
           value: s,
           label: t(`status.intake.${s}`),
         }))}
@@ -846,6 +877,14 @@ export default function IntakePage() {
         }}
         onClose={() => setReviewOpen(false)}
         onConfirmed={() => {
+          setReviewOpen(false);
+          list.refresh();
+          refreshPendingCount();
+        }}
+        // A rejection creates no order but does settle the row, so the queue and
+        // the badge both have to be re-read. Without this the row the operator
+        // just refused stays on screen still looking like work to do.
+        onRejected={() => {
           setReviewOpen(false);
           list.refresh();
           refreshPendingCount();
