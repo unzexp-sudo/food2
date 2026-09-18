@@ -288,12 +288,64 @@ def test_the_factory_builds_mistral_when_configured(monkeypatch, mistral_on):
     assert isinstance(get_extractor(), MistralOcrExtractor)
 
 
-def test_the_factory_refuses_mistral_without_a_key(monkeypatch):
+def test_the_factory_still_builds_mistral_without_a_key(monkeypatch):
+    """The factory must NOT raise on a missing key, because the pipeline calls
+    it for every document before it knows the source type.
+
+    If it raised, selecting Mistral but not yet pasting the key would take down
+    typed-text intake — orders that need no OCR and work fine today. The refusal
+    belongs at the point OCR is actually required, which is what the extractor
+    tests above assert.
+    """
     monkeypatch.setattr(settings, "ai_provider", "mistral")
     monkeypatch.setattr(settings, "mistral_api_key", "")
 
-    with pytest.raises(RuntimeError, match="ERP_MISTRAL_API_KEY"):
-        get_extractor()
+    assert isinstance(get_extractor(), MistralOcrExtractor)
+
+
+def test_text_intake_keeps_working_while_mistral_is_unkeyed(monkeypatch):
+    """The concrete consequence of the above: a typed order must still parse."""
+    monkeypatch.setattr(settings, "ai_provider", "mistral")
+    monkeypatch.setattr(settings, "mistral_api_key", "")
+
+    result = get_extractor().extract(source_type="text", raw_text="土豆 50斤")
+
+    assert [(l.product_name, l.quantity) for l in result.lines] == [("土豆", 50.0)]
+
+
+def test_a_typed_order_still_reaches_a_draft_order_with_mistral_selected(
+    client, admin_headers, monkeypatch, pin_cutoff
+):
+    """End-to-end through the real pipeline, which is where the risk actually
+    lives: the provider is flipped to Mistral before the key is pasted, and a
+    customer's typed order arrives in the meantime.
+
+    It must still become a draft order. A factory-level key check would have
+    failed this job — taking down a feature that has nothing to do with OCR.
+    """
+    from tests.test_intake import DEMO_TEXT, _get_customer_id, _wait_for_job
+
+    pin_cutoff(False)
+    monkeypatch.setattr(settings, "ai_provider", "mistral")
+    monkeypatch.setattr(settings, "mistral_api_key", "")
+
+    customer_id = _get_customer_id(client, admin_headers, "C001")
+    r = client.post(
+        "/api/v1/intake/submit",
+        json={
+            "customer_id": customer_id,
+            "source_type": "text",
+            "raw_text": DEMO_TEXT,
+            "delivery_date": "2026-09-08",
+        },
+        headers=admin_headers,
+    )
+    assert r.status_code == 201, f"{r.status_code} {r.text}"
+
+    job = _wait_for_job(client, r.json()["job_id"], admin_headers)
+
+    assert job["status"] == "completed", f"text intake broke: {job.get('error')}"
+    assert job["draft_order_id"] is not None
 
 
 def test_health_stops_calling_images_simulated_once_mistral_is_keyed(client, monkeypatch, mistral_on):

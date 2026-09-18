@@ -1134,10 +1134,15 @@ def get_extractor():
     if provider == "openai" and settings.openai_api_key:
         return OpenAIExtractor()
     if provider == "mistral":
-        if not (settings.mistral_api_key or "").strip():
-            raise RuntimeError(
-                "ai_provider=mistral but credentials missing: set ERP_MISTRAL_API_KEY"
-            )
+        # Deliberately does NOT check for the API key here, unlike aliyun_qwen
+        # below. The pipeline calls this factory for EVERY document, before it
+        # knows the source type — so a key check here turns "I have selected
+        # Mistral but not pasted the key yet" into a total intake outage,
+        # including the typed-text orders that need no OCR at all and currently
+        # work. MistralOcrExtractor refuses at the point it actually needs to
+        # read a page, which is the only moment the key matters. The unkeyed
+        # state is still visible: /api/health reports
+        # `image_extraction_is_simulated: true`.
         return MistralOcrExtractor()
     if provider == "aliyun_qwen":
         if not (
