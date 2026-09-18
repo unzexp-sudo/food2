@@ -10,6 +10,19 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_DIR.parent
 
 
+# Substrings that mark a variable as a placeholder someone still has to fill in.
+# Deliberately narrow, because this decides whether a credential is reported as
+# configured — a false positive would hide a working deployment, which is worse
+# than the false negative it is guarding against. A real API key never contains
+# any of these.
+_PLACEHOLDER_MARKERS = ("replace_me", "paste_", "changeme", "your_api_key", "todo")
+
+
+def _is_placeholder(value: str | None) -> bool:
+    lowered = (value or "").strip().lower()
+    return any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="ERP_",
@@ -215,6 +228,20 @@ class Settings(BaseSettings):
         )
 
     @property
+    def mistral_ocr_is_configured(self) -> bool:
+        """True when a Mistral key is present AND is not an obvious placeholder.
+
+        Railway rejects an empty variable value, so the only way to "create the
+        variable, ready for the key" is to seed it with a placeholder. That
+        placeholder must not read as a working configuration: a non-empty string
+        is enough for the API to be attempted, but it is not enough for a photo
+        to be read — and /api/health is the one place an operator looks to find
+        out which of the two they have.
+        """
+        key = (self.mistral_api_key or "").strip()
+        return bool(key) and not _is_placeholder(key)
+
+    @property
     def image_extraction_is_simulated(self) -> bool:
         """True when photos and scanned PDFs would NOT be really read.
 
@@ -246,7 +273,7 @@ class Settings(BaseSettings):
         if provider in ("", "mock", "openai"):
             return True
         if provider == "mistral":
-            return not (self.mistral_api_key or "").strip()
+            return not self.mistral_ocr_is_configured
         if provider == "aliyun_qwen":
             return not (
                 (self.aliyun_access_key_id or "").strip()

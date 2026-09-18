@@ -288,6 +288,36 @@ def test_the_factory_builds_mistral_when_configured(monkeypatch, mistral_on):
     assert isinstance(get_extractor(), MistralOcrExtractor)
 
 
+def test_a_placeholder_key_does_not_count_as_configured(tmp_path, monkeypatch):
+    """Railway rejects an empty variable value, so the variable gets seeded with
+    a placeholder to be filled in later. That must not read as a working
+    configuration — the API would be attempted and fail, and /api/health would
+    claim photos are being read when they are not."""
+    monkeypatch.setattr(settings, "ai_provider", "mistral")
+    monkeypatch.setattr(settings, "mistral_api_key", "REPLACE_ME_WITH_YOUR_MISTRAL_API_KEY")
+
+    assert settings.mistral_ocr_is_configured is False
+    assert settings.image_extraction_is_simulated is True
+
+    path = tmp_path / "note.png"
+    path.write_bytes(PNG_BYTES)
+    with pytest.raises(RuntimeError, match="placeholder"):
+        MistralOcrExtractor().extract(
+            source_type="image", file_path=str(path), original_filename="note.png"
+        )
+
+
+def test_a_real_looking_key_is_not_mistaken_for_a_placeholder():
+    """The check decides whether a credential is reported as configured, so a
+    false positive would hide a working deployment. Only obvious markers count."""
+    from app.core.config import Settings
+
+    for key in ("sk-abc123def456", "Xk9Qm2Lp7Rt4Vw1Yz8Nb", "mistral-key-2026"):
+        assert Settings(
+            ai_provider="mistral", mistral_api_key=key
+        ).mistral_ocr_is_configured is True
+
+
 def test_the_factory_still_builds_mistral_without_a_key(monkeypatch):
     """The factory must NOT raise on a missing key, because the pipeline calls
     it for every document before it knows the source type.

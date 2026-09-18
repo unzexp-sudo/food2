@@ -1012,10 +1012,11 @@ class MistralOcrExtractor:
                     original_filename=original_filename,
                 )
 
-        if not (settings.mistral_api_key or "").strip():
+        if not settings.mistral_ocr_is_configured:
             raise RuntimeError(
-                "ai_provider=mistral but ERP_MISTRAL_API_KEY is empty — refusing "
-                "to fall back to the mock OCR, which would invent line items"
+                "ai_provider=mistral but ERP_MISTRAL_API_KEY is empty or still a "
+                "placeholder — refusing to fall back to the mock OCR, which would "
+                "invent line items"
             )
 
         with open(file_path, "rb") as f:
