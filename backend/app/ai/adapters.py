@@ -1079,7 +1079,7 @@ class MistralOcrExtractor:
                 # message name the document instead of a wall of base64.
                 chunk["document_name"] = original_filename
 
-        markdown, confidence, page_min, pages, degraded = self._ocr(chunk)
+        markdown, confidence, page_min, pages, figures, degraded = self._ocr(chunk)
 
         notes = [f"mistral {settings.mistral_ocr_model} pages={pages}"]
         if degraded:
@@ -1117,7 +1117,7 @@ class MistralOcrExtractor:
                     for k in ("product_name", "quantity", "unit", "unit_price", "amount")
                 }
 
-        return apply_review_gate(ExtractionResult(
+        result = apply_review_gate(ExtractionResult(
             lines=lines,
             parser_notes="; ".join(notes),
             doc_type=doc_type,
@@ -1126,10 +1126,26 @@ class MistralOcrExtractor:
             image_path=file_path if source_type == "image" else None,
         ))
 
-    def _ocr(self, chunk: dict) -> tuple[str, float | None, float | None, int, str]:
+        if not result.lines:
+            # A document nobody could read a line out of must never auto-approve.
+            # This is not hypothetical: a page of pure figures — a photo OF notes,
+            # or a gallery screenshot — comes back with near-empty markdown and the
+            # real content in the vendor's `images` array. `include_image_base64`
+            # is off, so the content is not in the text at all. Without this, the
+            # page confidence is high, no line carries a review reason, and the
+            # gate would happily approve an EMPTY order.
+            extra = "no line items could be read from the document"
+            if figures:
+                extra += f" ({figures} figure(s) were extracted instead of text)"
+            result.parser_notes = (result.parser_notes + "; " + extra).strip("; ")
+            result.requires_human_review = True
+        return result
+
+    def _ocr(self, chunk: dict) -> tuple[str, float | None, float | None, int, int, str]:
         """POST one document to Mistral.
 
-        Returns (markdown, average_confidence, worst_page_confidence, pages, note).
+        Returns (markdown, average_confidence, worst_page_confidence, pages,
+        figures, note).
 
         Confidence is None when the deployment will not return scores — and the
         review gate reads None as "unverified" and flags the document, so that
@@ -1186,7 +1202,11 @@ class MistralOcrExtractor:
         mins = [float(v) for v in minimums if isinstance(v, (int, float))]
         confidence = round(sum(vals) / len(vals), 4) if vals else None
         worst = min(mins) if mins else None
-        return markdown, confidence, worst, len(pages), degraded
+        # Figures the vendor pulled out of the page. When the markdown is nearly
+        # empty and this is not, the real content was pictures, not text — and
+        # with `include_image_base64` off it is not in the response at all.
+        figures = sum(len(p.get("images") or []) for p in pages)
+        return markdown, confidence, worst, len(pages), figures, degraded
 
 
 def get_extractor():

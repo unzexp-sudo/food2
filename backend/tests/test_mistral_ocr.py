@@ -37,8 +37,13 @@ class _FakeResponse:
             )
 
 
-def _page(markdown: str, score: float | None = None, minimum: float | None = None) -> dict:
-    page: dict = {"index": 0, "markdown": markdown, "images": []}
+def _page(markdown: str, score: float | None = None, minimum: float | None = None,
+          figures: int = 0) -> dict:
+    page: dict = {
+        "index": 0,
+        "markdown": markdown,
+        "images": [{"id": f"img-{i}.jpeg"} for i in range(figures)],
+    }
     if score is not None:
         scores: dict = {"average_page_confidence_score": score}
         if minimum is not None:
@@ -47,9 +52,10 @@ def _page(markdown: str, score: float | None = None, minimum: float | None = Non
     return page
 
 
-def _payload(markdown: str, score: float | None = None, minimum: float | None = None) -> dict:
+def _payload(markdown: str, score: float | None = None, minimum: float | None = None,
+             figures: int = 0) -> dict:
     return {
-        "pages": [_page(markdown, score, minimum)],
+        "pages": [_page(markdown, score, minimum, figures)],
         "model": "mistral-ocr-latest",
         "usage_info": {"pages_processed": 1},
     }
@@ -333,6 +339,43 @@ def test_the_worst_page_score_is_surfaced_when_it_is_low(tmp_path, monkeypatch, 
 
     assert "lowest page confidence 0.13" in result.parser_notes
     assert result.overall_confidence == 0.92
+
+
+def test_a_page_of_pure_figures_is_flagged_and_never_approved(tmp_path, monkeypatch, mistral_on):
+    """A page whose only content is figures returns nothing but placeholders and
+    puts the real content in the vendor's `images` array, which we do not
+    download. The page confidence is HIGH and no line carries a review reason, so
+    without an explicit check the gate would approve an EMPTY order."""
+    path = tmp_path / "note.png"
+    path.write_bytes(PNG_BYTES)
+    _capture(monkeypatch, _payload(
+        "![img-0.jpeg](img-0.jpeg)\n\n![img-1.jpeg](img-1.jpeg)",
+        score=0.99, minimum=0.9, figures=2,
+    ))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="note.png"
+    )
+
+    assert result.lines == []
+    assert result.requires_human_review is True
+    assert "no line items could be read" in result.parser_notes
+    assert "2 figure(s)" in result.parser_notes
+
+
+def test_an_empty_read_is_flagged_even_with_high_confidence(tmp_path, monkeypatch, mistral_on):
+    """A blank page at 0.99 confidence is still a page nobody read."""
+    path = tmp_path / "note.png"
+    path.write_bytes(PNG_BYTES)
+    _capture(monkeypatch, _payload("", score=0.99, minimum=0.99))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="note.png"
+    )
+
+    assert result.lines == []
+    assert result.requires_human_review is True
+    assert "no line items could be read" in result.parser_notes
 
 
 # --- the failure we refuse ----------------------------------------------------
