@@ -2,9 +2,17 @@
 
 **Phase 2 UX plan — integrating the binding flow that Phase 1 already built.**
 
-Status: proposed. Companion to `IDENTITY_IMPLEMENTATION_SPEC.md` (Phase 1, 2026-09-14),
-which designed and shipped the binding *capability*. This plan covers the *integration*
-into the intake flow, plus three defects found while analysing it.
+Status: **S0 and S2 are implemented** (`f6181d6`, `57b7bc0`); S1 was done as the
+mechanical means to S2. **S3 and S4 are not.** This document is kept as the record of the
+diagnosis and the reasoning, not as an open proposal.
+
+Companion to `IDENTITY_IMPLEMENTATION_SPEC.md` (Phase 1, 2026-09-14), which designed and
+shipped the binding *capability*. This plan covers the *integration* into the intake flow,
+plus four defects found while analysing it.
+
+> Verification note: S0/S2 are verified by the backend suite (464 passed, 2 skipped) and
+> `npx tsc -b --force` (exit 0). The frontend has **no test runner**, so the end-to-end
+> flow in §5 has **not** been clicked through in a browser — that remains to be done.
 
 ---
 
