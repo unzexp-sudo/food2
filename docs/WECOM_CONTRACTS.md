@@ -246,6 +246,23 @@ Run in this order; first hit wins. Set `bind_method` + `bind_confidence`.
    the gateway additionally posts an internal alert to `WECOM_INTERNAL_OPS_CHAT_ID`
    (or logs it in mock mode) so staff can bind it manually.
 
+**Invariant: `bind_status == bound` if and only if `customer_id is not null`.** The two
+fields travel together — the ingestor writes `bind_status` as a pure function of
+`customer_id`, and `unresolved` is *defined* as `customer_id = None`. A row that names a
+customer while reporting itself unbound is a contradiction, not a nuance: the
+"please bind manually" worklist is filtered on `bind_status`, so such a row would keep
+asking for a binding it already has.
+
+The **ERP write-back** is a sixth way `customer_id` gets filled: when the handoff response
+carries a `customer_id` the gateway did not send, the gateway records it and sets
+`bind_status = bound` (it only ever fills a gap — an existing binding is never
+overwritten). This path is *not* part of the cascade above and carries no
+`bind_method`/`bind_confidence`; it is the weakest form of binding, since nobody
+confirmed it. It is also invisible to `MockErpClient`, which echoes back
+`payload["customer_id"]` and therefore can never make the response truthy when the row had
+none — so a test for it needs a stub ERP that answers with a customer the payload did not
+carry.
+
 Contact resolution order for *phone*: WeCom archive payloads do not carry a phone
 number. The phone rule therefore only applies when the Gateway has already
 fetched the contact profile (`externalcontact/get?external_userid=`) and it
