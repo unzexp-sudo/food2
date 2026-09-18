@@ -44,11 +44,13 @@ from app.services.intake.service import (
     _doc_out,
     _extraction_out,
     _job_out,
+    customers_for,
     get_document,
     get_extraction_for_job,
     get_job,
     get_job_for_document,
     count_parked,
+    count_unbound,
     count_pending_review,
     list_documents,
     list_jobs,
@@ -149,6 +151,9 @@ def list_documents_endpoint(
     # Parked messages are hidden by default; pass true (or status=parked) to
     # audit what Gate 1 threw away.
     include_parked: bool = Query(default=False),
+    # Held documents: no customer binding, so no order can be created from them
+    # until someone binds the conversation. The inbox offers this as a filter.
+    unbound_only: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -162,9 +167,15 @@ def list_documents_endpoint(
         status=status,
         pending_first=pending_first,
         include_parked=include_parked,
+        unbound_only=unbound_only,
     )
     start = (page - 1) * page_size
-    items = [_doc_out(d, j) for d, j in pairs[start : start + page_size]]
+    page_pairs = pairs[start : start + page_size]
+    customers = customers_for(db, [d for d, _ in page_pairs])
+    items = [
+        _doc_out(d, j, customer=customers.get(d.customer_id or ""))
+        for d, j in page_pairs
+    ]
     return page_response(items, total, page, page_size)
 
 
@@ -179,12 +190,17 @@ def pending_review_count_endpoint(
     a wrong park is otherwise invisible, and an operator who cannot see the
     discarded pile cannot check it.
 
+    `unbound` is the subset that cannot be finished at all yet, because their
+    conversation has no customer. Without it the banner says "17 waiting for
+    review" and hides the fact that the queue is blocked rather than busy.
+
     Declared before `/documents/{id}` so the literal path wins over the
     path-parameter route.
     """
     return {
         "pending_review": count_pending_review(db),
         "parked": count_parked(db),
+        "unbound": count_unbound(db),
     }
 
 
@@ -198,7 +214,8 @@ def get_document_endpoint(
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     job = get_job_for_document(db, document_id)
-    return _doc_out(doc, job)
+    customers = customers_for(db, [doc])
+    return _doc_out(doc, job, customer=customers.get(doc.customer_id or ""))
 
 
 @router.get("/documents/{document_id}/company-proposal", response_model=None)

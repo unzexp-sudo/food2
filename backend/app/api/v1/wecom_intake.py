@@ -27,7 +27,7 @@ from app.core.database import get_db
 from app.core.deps import require_service_or_roles
 from app.core.pagination import page_response
 from app.models import Customer, CustomerContact, IntakeJob, User
-from app.services.intake.service import _doc_out, _job_out
+from app.services.intake.service import _doc_out, _job_out, customers_for
 from app.services.intake.triage import NOT_ORDER
 from app.services.intake.wecom_intake import ingest_wecom_message, list_wecom_documents
 
@@ -41,7 +41,7 @@ def _doc_with_job(db: Session, doc) -> dict:
         .order_by(IntakeJob.retry_count.desc(), IntakeJob.created_at.desc())
         .first()
     )
-    out = _doc_out(doc, job)
+    out = _doc_out(doc, job, customer=customers_for(db, [doc]).get(doc.customer_id or ""))
     out["wecom"] = (doc.document_meta or {}).get("wecom")
     return out
 

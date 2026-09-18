@@ -25,6 +25,7 @@ from app.models import (
     IntakeJob,
     User,
 )
+from app.services.identity.service import identity_block_of, is_unbound
 from app.services.intake.company_proposal import build_company_proposal
 
 
@@ -64,12 +65,43 @@ def _store_original(
     return str(path), _sha256(content)
 
 
-def _doc_out(doc: IntakeDocument, job: IntakeJob | None = None) -> dict:
-    """Serialize IntakeDocument (+ embedded job summary)."""
+def customers_for(db: Session, docs: list[IntakeDocument]) -> dict[str, Customer]:
+    """Batch-load the customers behind these documents, keyed by customer id.
+
+    One query for the whole page, not one per row — the inbox lists 50 documents
+    at a time and a per-row lookup would be 50 queries to render 50 names.
+    """
+    ids = {d.customer_id for d in docs if d.customer_id}
+    if not ids:
+        return {}
+    rows = db.query(Customer).filter(Customer.id.in_(ids)).all()
+    return {c.id: c for c in rows}
+
+
+def _doc_out(
+    doc: IntakeDocument,
+    job: IntakeJob | None = None,
+    *,
+    customer: Customer | None = None,
+) -> dict:
+    """Serialize IntakeDocument (+ embedded job summary).
+
+    `customer` is passed in rather than looked up here so callers can batch it;
+    see `customers_for`. It carries the *name* because `customer_id` alone cannot
+    render a name, and the inbox's Customer column reads one.
+
+    `identity` is the conversation's binding state. It has to be on the row: a
+    document held for want of a customer looks exactly like a normal one
+    otherwise, and the reviewer's only clue was a banner telling them to go and
+    bind something they could not identify from the list.
+    """
     file_url = f"/api/v1/intake/documents/{doc.id}/file"
+    block = identity_block_of(doc)
     return {
         "id": doc.id,
         "customer_id": doc.customer_id,
+        "customer_name_en": customer.name_en if customer else None,
+        "customer_name_zh": customer.name_zh if customer else None,
         "source_type": doc.source_type,
         "original_filename": doc.original_filename,
         "file_url": file_url,
@@ -79,6 +111,14 @@ def _doc_out(doc: IntakeDocument, job: IntakeJob | None = None) -> dict:
         "job_id": job.id if job else None,
         "job_status": job.status if job else None,
         "draft_order_id": job.draft_order_id if job else None,
+        "identity": {
+            "status": block.get("status"),
+            "chat_key": block.get("chat_key"),
+            "kind": block.get("kind"),
+            "value": block.get("value"),
+            "method": block.get("method"),
+            "reason": block.get("reason"),
+        },
     }
 
 
@@ -235,6 +275,7 @@ def list_documents(
     status: str | None = None,
     pending_first: bool = False,
     include_parked: bool = False,
+    unbound_only: bool = False,
 ) -> tuple[list[tuple[IntakeDocument, IntakeJob | None]], int]:
     """Return (documents+latest_job, total).
 
@@ -249,6 +290,13 @@ def list_documents(
     orders, so showing them by default would defeat the point of parking them.
     Ask for them explicitly (`status="parked"` or `include_parked=True`) when
     you want to audit or promote them.
+
+    `unbound_only` narrows to documents held for want of a customer binding —
+    the rows an operator can do nothing with until they bind the conversation.
+    Filtered in Python because the SQL form of this JSON comparison is a known
+    trap (see `identity.service._meta_status_expr`) and the rows are already in
+    memory. Server-side on purpose: filtering this in the browser would show a
+    page of 20 that silently hid every match on the pages not fetched.
     """
     q = db.query(IntakeDocument)
     if customer_id:
@@ -256,6 +304,9 @@ def list_documents(
     if source_type:
         q = q.filter(IntakeDocument.source_type == source_type)
     docs = q.order_by(IntakeDocument.created_at.desc()).all()
+
+    if unbound_only:
+        docs = [d for d in docs if is_unbound(d)]
 
     # Fetch the latest job per document (there's typically one; pick the
     # highest retry_count to support retry-after-failure scenarios).
@@ -292,6 +343,20 @@ def count_pending_review(db: Session) -> int:
     `count_parked` for that separate number.
     """
     return db.query(IntakeJob).filter(IntakeJob.status == "needs_review").count()
+
+
+def count_unbound(db: Session) -> int:
+    """How many documents are held for want of a customer binding.
+
+    The number that matters to an operator staring at "17 waiting for review":
+    if all 17 are unbound, none of them can be finished, and the queue is not
+    work — it is a blocked queue with one action behind it.
+
+    Counted in Python for the same reason as `unbound_only` in
+    `list_documents`: the SQL form of this JSON comparison is a known trap.
+    This is a work queue, not history, so the set is small by construction.
+    """
+    return sum(1 for d in db.query(IntakeDocument).all() if is_unbound(d))
 
 
 def count_parked(db: Session) -> int:

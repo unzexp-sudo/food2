@@ -446,3 +446,193 @@ def test_identity_endpoints_require_ops_or_admin(
         path, headers=warehouse_headers
     )
     assert r.status_code == 403, f"{method} {path} → {r.status_code} {r.text}"
+
+
+# ---------------------------------------------------------------------------
+# 5. The inbox can SEE the binding state (docs/INTAKE_BINDING_UX_PLAN.md §S0)
+# ---------------------------------------------------------------------------
+#
+# The gate itself is server-side and correct. But until these fields were
+# serialised the UI had no way to know a row was held: `customer_id` alone
+# renders "—" for *both* "no customer" and "a customer whose name we never
+# sent". The reviewer's only signal was a banner telling them to go and bind a
+# conversation they could not identify from the list.
+
+# Deliberately NOT the whole `document_meta["identity"]` block: that also holds
+# identity_id, confirmed_by and released_by. This is the subset the inbox needs,
+# pinned so nothing extra can creep onto a widely-read list endpoint.
+IDENTITY_KEYS = {"status", "chat_key", "kind", "value", "method", "reason"}
+
+
+def _get_document(client, headers, document_id: str) -> dict:
+    r = client.get(f"/api/v1/intake/documents/{document_id}", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_an_unbound_document_tells_the_ui_it_is_unbound(
+    client, admin_headers, require_review  # noqa: F811
+):
+    """The row must say *unbound* and carry the chat_key to act on.
+
+    This is what lets the inbox offer a "needs customer" affordance instead of a
+    dead "—", and what tells the review drawer which conversation to bind.
+    """
+    chat = _uniq("wrChatUnbound")
+    r = _post_wecom(client, external_userid=None, chat_id=chat)
+    assert r.status_code == 201, r.text
+
+    doc = _get_document(client, admin_headers, r.json()["document_id"])
+    assert doc["customer_id"] is None
+    assert doc["identity"]["status"] == "unbound"
+    assert doc["identity"]["chat_key"] == f"wecom_chat_id:{chat}"
+    assert doc["identity"]["kind"] == "wecom_chat_id"
+    assert doc["identity"]["value"] == chat
+    # Nothing to render a name from — and the row says so rather than guessing.
+    assert doc["customer_name_en"] is None
+    assert doc["customer_name_zh"] is None
+
+
+def test_a_bound_document_serialises_the_customer_name(
+    client, admin_headers, require_review  # noqa: F811
+):
+    """The Customer column reads a NAME, not just an id.
+
+    `IntakePage` renders `pickName(lang, customer_name_en, customer_name_zh)`
+    while `_doc_out` sent neither, so even a correctly bound order showed "—".
+    Binding alone would not have fixed the column.
+    """
+    chat = _uniq("wrChatBound")
+    customer_id = _get_customer_id(client, admin_headers)
+    with SessionLocal() as db:
+        customer = db.get(Customer, customer_id)
+        expected_en, expected_zh = customer.name_en, customer.name_zh
+    assert expected_en, "the seed customer has no name to assert against"
+
+    r = _post_wecom(client, external_userid=None, chat_id=chat)
+    assert r.status_code == 201, r.text
+    document_id = r.json()["document_id"]
+
+    bind = client.post(
+        "/api/v1/identity/bind",
+        json={"kind": "wecom_chat_id", "value": chat, "customer_id": customer_id},
+        headers=admin_headers,
+    )
+    assert bind.status_code == 201, bind.text
+    assert bind.json()["released"] == 1, bind.json()
+
+    doc = _get_document(client, admin_headers, document_id)
+    assert doc["customer_id"] == customer_id
+    assert doc["customer_name_en"] == expected_en
+    assert doc["customer_name_zh"] == expected_zh
+    assert doc["identity"]["status"] == "bound"
+    # `identity` is the method that means "a human bound this chat HERE" —
+    # as opposed to upstream_asserted / parent_inherited.
+    assert doc["identity"]["method"] == "identity"
+
+
+def test_the_inbox_list_carries_the_name_and_the_binding_state(
+    client, admin_headers, require_review  # noqa: F811
+):
+    """The list is what the column actually reads, so it must carry both fields."""
+    chat = _uniq("wrChatList")
+    customer_id = _get_customer_id(client, admin_headers)
+    r = _post_wecom(client, external_userid=None, chat_id=chat)
+    assert r.status_code == 201, r.text
+    document_id = r.json()["document_id"]
+
+    bind = client.post(
+        "/api/v1/identity/bind",
+        json={"kind": "wecom_chat_id", "value": chat, "customer_id": customer_id},
+        headers=admin_headers,
+    )
+    assert bind.status_code == 201, bind.text
+
+    listing = client.get(
+        "/api/v1/intake/documents",
+        params={"customer_id": customer_id, "page_size": 100},
+        headers=admin_headers,
+    )
+    assert listing.status_code == 200, listing.text
+    rows = [i for i in listing.json()["items"] if i["id"] == document_id]
+    assert rows, "the bound document is missing from the inbox list"
+
+    row = rows[0]
+    assert row["customer_name_en"], "the Customer column has nothing to render"
+    assert row["identity"]["status"] == "bound"
+    assert row["identity"]["chat_key"] == f"wecom_chat_id:{chat}"
+
+
+def test_the_serialised_identity_block_is_a_fixed_shape(
+    client, admin_headers, require_review  # noqa: F811
+):
+    """Pin the contract so the full meta block cannot leak onto the list endpoint."""
+    chat = _uniq("wrChatShape")
+    r = _post_wecom(client, external_userid=None, chat_id=chat)
+    assert r.status_code == 201, r.text
+
+    doc = _get_document(client, admin_headers, r.json()["document_id"])
+    assert set(doc["identity"]) == IDENTITY_KEYS, doc["identity"]
+
+
+def test_the_inbox_can_filter_to_documents_that_need_a_customer(
+    client, admin_headers, require_review  # noqa: F811
+):
+    """`unbound_only` is what makes the blocked rows findable in one click.
+
+    Server-side on purpose: a browser-side filter would show page 1 of 20 and
+    silently hide every match on the pages it never fetched.
+    """
+    held_chat = _uniq("wrChatFilterHeld")
+    bound_chat = _uniq("wrChatFilterBound")
+    customer_id = _get_customer_id(client, admin_headers)
+
+    held = _post_wecom(client, external_userid=None, chat_id=held_chat)
+    assert held.status_code == 201, held.text
+    bound = _post_wecom(client, external_userid=None, chat_id=bound_chat)
+    assert bound.status_code == 201, bound.text
+
+    bind = client.post(
+        "/api/v1/identity/bind",
+        json={"kind": "wecom_chat_id", "value": bound_chat, "customer_id": customer_id},
+        headers=admin_headers,
+    )
+    assert bind.status_code == 201, bind.text
+
+    r = client.get(
+        "/api/v1/intake/documents",
+        params={"unbound_only": True, "page_size": 100},
+        headers=admin_headers,
+    )
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    ids = {i["id"] for i in items}
+
+    assert held.json()["document_id"] in ids, "the held document is missing"
+    assert bound.json()["document_id"] not in ids, "a bound document leaked in"
+    # Everything returned really is held — the filter must not be a hint.
+    assert all(i["identity"]["status"] == "unbound" for i in items), items
+
+
+def test_the_review_count_separates_held_rows_from_the_rest(
+    client, admin_headers, require_review  # noqa: F811
+):
+    """The banner needs to be able to say the queue is BLOCKED, not busy.
+
+    "17 waiting for review" is true and useless when all 17 are held — it reads
+    as a queue with work in it when it is a queue with one action behind it.
+    """
+    chat = _uniq("wrChatCount")
+    r = _post_wecom(client, external_userid=None, chat_id=chat)
+    assert r.status_code == 201, r.text
+    _wait_for_job(client, r.json()["job_id"], admin_headers)
+
+    counts = client.get("/api/v1/intake/review-count", headers=admin_headers)
+    assert counts.status_code == 200, counts.text
+    body = counts.json()
+
+    assert "unbound" in body, body
+    assert body["unbound"] >= 1, body
+    # The held row is counted in both, which is what lets the banner report
+    # "N waiting · M need a customer first" without contradicting itself.
+    assert body["pending_review"] >= 1, body
