@@ -219,6 +219,15 @@ def test_csv_submit(client, admin_headers):
 # 3. Image submit (mock OCR)
 # ---------------------------------------------------------------------------
 def test_image_submit_mock_ocr(client, admin_headers):
+    """The mock provider does NOT read the image — and must not pretend to.
+
+    This suite runs with `intake_require_human_review` off (see
+    `_legacy_auto_approve`), which is exactly the configuration a site would
+    use to automate intake. So the only thing standing between a canned line
+    and a real order is the extractor's own `requires_human_review`. That is
+    what this test pins: an image nobody read can never auto-approve, however
+    the global gate is set.
+    """
     customer_id = _get_customer_id(client, admin_headers, "C001")
     # An empty PNG file — the mock extractor ignores the bytes and returns canned lines.
     png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
@@ -236,20 +245,27 @@ def test_image_submit_mock_ocr(client, admin_headers):
     assert r.status_code == 201, f"{r.status_code} {r.text}"
     job_id = r.json()["job_id"]
     job = _wait_for_job(client, job_id, admin_headers)
-    assert job["status"] == "completed", f"Job failed: {job.get('error')}"
 
-    order = _get_draft_order(client, job, admin_headers)
-    lines = order["lines"]
-    assert len(lines) >= 1
-    # Mock OCR returns canned lines (土豆 50斤 etc.) which should match aliases
-    for ln in lines:
-        assert ln["product_id"] is not None
+    # HARD RULE: not read => not ordered, even with the blanket gate off.
+    assert job["status"] == "needs_review", f"expected needs_review, got {job['status']}"
+    assert job["draft_order_id"] is None, "an unread image must not auto-create an order"
 
-    # The extraction should note that image OCR is mock.
     r2 = client.get(f"/api/v1/intake/extractions/{job_id}", headers=admin_headers)
     assert r2.status_code == 200
     ext = r2.json()
+    raw = ext["raw_output"]
+    # The canned lines stay visible so a reviewer can see what WOULD be ordered
+    # — but the payload is flagged, and the note says where they came from.
+    assert raw.get("requires_human_review") is True
     assert "mock" in (ext["parser_notes"] or "").lower()
+    assert raw["lines"], "the canned lines should still be visible for the reviewer"
+
+    # A human confirming is the only thing that turns it into an order.
+    r3 = client.post(
+        f"/api/v1/intake/jobs/{job_id}/confirm-review", headers=admin_headers
+    )
+    assert r3.status_code == 200, f"{r3.status_code} {r3.text}"
+    assert r3.json()["order_id"]
 
 
 # ---------------------------------------------------------------------------

@@ -357,6 +357,17 @@ class MockExtractor:
         lines: list[RawLine] = []
         doc_type = source_type
         structured: dict | None = None
+        # True when the mock provider could not READ the document and fell back
+        # to canned lines. Such a document must never auto-approve.
+        #
+        # The canned lines (土豆 50斤 / 大白菜 30斤 / 五花肉 20斤) are plausible
+        # products for this business, so a reviewer skimming them cannot tell
+        # they were never read off the page. What normally parks them is
+        # `settings.intake_require_human_review` — but that blanket gate is
+        # exactly what gets switched OFF to automate intake, and switching it
+        # off must not start approving documents nobody read. So the extractor
+        # asserts it itself, and the assertion survives the setting.
+        fabricated = False
 
         if source_type in ("text", "email_body"):
             text = raw_text or ""
@@ -387,6 +398,7 @@ class MockExtractor:
                 if note == "scanned_pdf_no_text":
                     pdf_lines = mock_ocr_lines(original_filename)
                     notes.append("pdf scanned, fell back to mock OCR")
+                    fabricated = True
                 else:
                     notes.append("pdf text extracted")
                 # If the PDF text extracted into a structured supplier-order
@@ -405,6 +417,9 @@ class MockExtractor:
                     structured = struct
                     doc_type = "supplier_order_table"
                     notes.append(f"structured_order lines={len(pdf_lines)}")
+                    # The text layer parsed into a real order table, so the
+                    # canned fallback above is no longer what the lines are.
+                    fabricated = False
                 lines = pdf_lines
             else:
                 notes.append("pdf file missing")
@@ -423,6 +438,9 @@ class MockExtractor:
             else:
                 notes.append("image OCR not available in mock provider")
                 doc_type = "handwritten_note" if original_filename and "note" in original_filename.lower() else "image"
+                # Nothing looked at the pixels. Flag it here rather than
+                # relying on the global gate.
+                fabricated = True
         else:
             notes.append(f"unknown source_type={source_type}")
 
@@ -431,6 +449,9 @@ class MockExtractor:
             parser_notes="; ".join(notes),
             doc_type=doc_type,
             structured=structured,
+            # A fabricated reading is a hard "must be seen by a human" — it is
+            # not a confidence question, so no threshold or setting may clear it.
+            requires_human_review=fabricated,
         )
 
 
