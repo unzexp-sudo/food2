@@ -430,9 +430,17 @@ function StandingTab() {
   };
 
   const handleCreateOrder = async (tpl: StandingOrderTemplate) => {
-    const ok = await run(() => api.post(`/standing-order-templates/${tpl.id}/create-order`), {
-      success: t("pages.master.contracts.orderCreated"),
-    });
+    // Send an empty object, not nothing. The endpoint declares
+    // `payload: CreateOrderRequest` as a REQUIRED body parameter, so a request
+    // with no body is refused with 422 before any of this runs — the button
+    // could never work. `delivery_date` is optional and the server defaults it
+    // to today (tests post `json={}` and expect 201).
+    const ok = await run(
+      () => api.post(`/standing-order-templates/${tpl.id}/create-order`, {}),
+      {
+        success: t("pages.master.contracts.orderCreated"),
+      },
+    );
     if (ok) {
       list.refresh();
     }

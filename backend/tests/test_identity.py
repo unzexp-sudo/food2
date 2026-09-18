@@ -30,7 +30,9 @@ def _uniq(prefix: str) -> str:
 
 
 def _post_wecom(client, *, external_userid: str | None, customer_id: str | None = None,
-                content: str = ORDER_TEXT, chat_id: str | None = None):
+                content: str = ORDER_TEXT, chat_id: str | None = None,
+                contact_alias: str | None = None, contact_name: str | None = None,
+                corp_name: str | None = None):
     payload = {
         "msgid": _uniq("wm-identity"),
         "msgtype": "text",
@@ -40,6 +42,14 @@ def _post_wecom(client, *, external_userid: str | None, customer_id: str | None 
     }
     if customer_id:
         payload["customer_id"] = customer_id
+    # Contact metadata the gateway forwards on handoff. Display only — it names
+    # the conversation, it never resolves a customer.
+    if contact_alias is not None:
+        payload["contact_alias"] = contact_alias
+    if contact_name is not None:
+        payload["contact_name"] = contact_name
+    if corp_name is not None:
+        payload["corp_name"] = corp_name
     return client.post("/api/v1/intake/wecom", json=payload, headers=SERVICE_HEADERS)
 
 
@@ -461,7 +471,16 @@ def test_identity_endpoints_require_ops_or_admin(
 # Deliberately NOT the whole `document_meta["identity"]` block: that also holds
 # identity_id, confirmed_by and released_by. This is the subset the inbox needs,
 # pinned so nothing extra can creep onto a widely-read list endpoint.
-IDENTITY_KEYS = {"status", "chat_key", "kind", "value", "method", "reason"}
+#
+# `display_name` / `corp_name` / `alias` were added deliberately, not by drift:
+# `status: unbound` says a decision is needed but not who is on the other end,
+# so a held row could only be identified by its `chat_key`. These are the same
+# three fields `/identity/unbound` already returns, so the list endpoint
+# discloses nothing new — and none of them ever resolves a customer.
+IDENTITY_KEYS = {
+    "status", "chat_key", "kind", "value", "method", "reason",
+    "display_name", "corp_name", "alias",
+}
 
 
 def _get_document(client, headers, document_id: str) -> dict:
@@ -561,6 +580,67 @@ def test_the_inbox_list_carries_the_name_and_the_binding_state(
     assert row["customer_name_en"], "the Customer column has nothing to render"
     assert row["identity"]["status"] == "bound"
     assert row["identity"]["chat_key"] == f"wecom_chat_id:{chat}"
+
+
+def test_a_held_row_says_who_is_talking(
+    client, admin_headers, require_review  # noqa: F811
+):
+    """`unbound` is only actionable if the reviewer can tell WHO is unbound.
+
+    Without these the inbox could say nothing but "needs a customer" next to a
+    `chat_key`, and the operator had to identify the conversation from memory.
+    They are contact metadata forwarded by the gateway: they name the
+    conversation for a human and never resolve a customer.
+    """
+    chat = _uniq("wrChatNamed")
+    r = _post_wecom(
+        client,
+        external_userid=None,
+        chat_id=chat,
+        contact_alias="陈记饭店",
+        contact_name="陈经理",
+        corp_name="陈记餐饮有限公司",
+    )
+    assert r.status_code == 201, r.text
+    document_id = r.json()["document_id"]
+
+    doc = _get_document(client, admin_headers, document_id)
+    assert doc["identity"]["status"] == "unbound"
+    assert doc["identity"]["alias"] == "陈记饭店"
+    assert doc["identity"]["display_name"] == "陈经理"
+    assert doc["identity"]["corp_name"] == "陈记餐饮有限公司"
+    # Naming the conversation must not bind it.
+    assert doc["customer_id"] is None
+
+    # The list is what renders the row, so it has to carry them too.
+    listing = client.get(
+        "/api/v1/intake/documents",
+        params={"unbound_only": True, "page_size": 100},
+        headers=admin_headers,
+    )
+    assert listing.status_code == 200, listing.text
+    rows = [i for i in listing.json()["items"] if i["id"] == document_id]
+    assert rows, "the held document is missing from the unbound inbox list"
+    assert rows[0]["identity"]["alias"] == "陈记饭店"
+
+
+def test_a_conversation_we_know_nothing_about_still_reports_the_keys(
+    client, admin_headers, require_review  # noqa: F811
+):
+    """Absent contact metadata is `None`, never a missing key or a guess.
+
+    A plausible-looking invented name is how a wrong bind starts, and a missing
+    key would make the UI read `undefined` and render an empty cell.
+    """
+    chat = _uniq("wrChatAnon")
+    r = _post_wecom(client, external_userid=None, chat_id=chat)
+    assert r.status_code == 201, r.text
+
+    doc = _get_document(client, admin_headers, r.json()["document_id"])
+    assert doc["identity"]["status"] == "unbound"
+    assert doc["identity"]["alias"] is None
+    assert doc["identity"]["display_name"] is None
+    assert doc["identity"]["corp_name"] is None
 
 
 def test_the_serialised_identity_block_is_a_fixed_shape(

@@ -97,11 +97,26 @@ interface DocIdentity {
   value: string | null;
   method: string | null;
   reason: string | null;
+  /** Who WeCom says is talking. Display only — never used to resolve anyone. */
+  display_name: string | null;
+  corp_name: string | null;
+  alias: string | null;
 }
 
 /** A document is held when its conversation has no customer binding. */
 const isHeld = (r: IntakeDocWithJob) =>
   !r.customer_id && r.identity?.status === "unbound";
+
+/**
+ * The best human-readable name for the other end of a held conversation.
+ *
+ * Order matters: the WeCom *alias* is the remark staff themselves set, so it
+ * usually reads like the customer's trading name; `corp_name` is the registered
+ * company; `display_name` is a person. Returns null when WeCom told us nothing,
+ * because an invented label is how a wrong bind starts.
+ */
+const contactLabel = (r: IntakeDocWithJob): string | null =>
+  r.identity?.alias || r.identity?.corp_name || r.identity?.display_name || null;
 interface ExtractionResponse {
   raw_output?: unknown;
   confidence?: number | null;
@@ -404,7 +419,7 @@ export default function IntakePage() {
     {
       title: t("pages.intake.colCustomer"),
       key: "customer",
-      width: 190,
+      width: 210,
       render: (_: unknown, r: IntakeDocWithJob) => {
         if (r.customer_id) {
           // `pickName` yields "" when both names are missing. That is a data
@@ -416,16 +431,30 @@ export default function IntakePage() {
         // what stops the operator opening the draft, clicking Confirm and
         // reading a toast telling them to go somewhere else.
         if (canMutate && isHeld(r)) {
+          // The action alone is not enough. The operator is being asked to make
+          // a decision about a conversation, so the row has to say who is on the
+          // other end — otherwise the only identifier is a `chat_key` they
+          // cannot act on. WeCom often tells us nothing, and that is worth
+          // saying too rather than leaving a gap to be guessed at.
+          const who = contactLabel(r);
           return (
-            <Button
-              size="small"
-              type="link"
-              icon={<LinkOutlined />}
-              style={{ paddingLeft: 0 }}
-              onClick={() => openBindFor(r)}
-            >
-              {t("pages.intake.bind.needsCustomer")}
-            </Button>
+            <Space direction="vertical" size={0}>
+              <Button
+                size="small"
+                type="link"
+                icon={<LinkOutlined />}
+                style={{ paddingLeft: 0 }}
+                onClick={() => openBindFor(r)}
+              >
+                {t("pages.intake.bind.needsCustomer")}
+              </Button>
+              <Typography.Text
+                type={who ? "secondary" : "warning"}
+                style={{ fontSize: 11 }}
+              >
+                {who ?? t("pages.intake.bind.unknownSender")}
+              </Typography.Text>
+            </Space>
           );
         }
         return "—";

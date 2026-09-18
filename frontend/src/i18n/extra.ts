@@ -120,6 +120,7 @@ const extra = {
         chooseCustomer: "Choose customer",
         bindToContinue: "Bind customer to continue",
         confirmFailed: "Could not create the order",
+        unknownSender: "Sender unknown",
       },
     },
     warehouse: {
@@ -142,6 +143,11 @@ const extra = {
         routeZone: "Route / Zone",
         driver: "Assigned Driver",
       },
+      // A partial delivery cannot be completed again: the server accepts only
+      // picked or out_for_delivery. The button used to be offered anyway.
+      partialNoComplete: "Partial — cannot be completed",
+      partialHint:
+        "This delivery was recorded as partial, so it cannot be completed again. The remainder is delivered on a new delivery.",
     },
     finance: {
       statements: {
@@ -217,7 +223,10 @@ const extra = {
         rawExcerpt: "Text the extraction read",
         searchLabel: "Find a customer",
         searchPlaceholder: "Search by code, name, phone or delivery zone",
-        searchHint: "Nothing is pre-selected. Pick the customer yourself.",
+        searchHint: "Nothing is pre-selected. A pre-filled search is a suggestion, not a choice.",
+        searchFromChat: "Pre-filled from this conversation: {{name}}",
+        searchFromChatHint: "Nothing is selected. Clear the box to see every customer.",
+        matchedOn: "matched on {{field}}",
         resultsCount: "{{count}} match(es)",
         noResults: "No customer matches that search.",
         showingFirst:

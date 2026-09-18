@@ -318,7 +318,16 @@ export default function BindCustomerDrawer({
                   />
                 ) : (
                   <>
-                    <CustomerPicker value={selected} onChange={setSelected} />
+                    <CustomerPicker
+                      value={selected}
+                      onChange={setSelected}
+                      // What WeCom calls this conversation, used only to pre-fill
+                      // the search box. The operator was reading the name on the
+                      // left and retyping it on the right.
+                      hint={
+                        chat.alias || chat.corp_name || chat.display_name || null
+                      }
+                    />
 
                     {selected ? (
                       <CustomerSummary customer={selected} />

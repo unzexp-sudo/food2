@@ -11,6 +11,8 @@ import {
   Select,
   Space,
   Table,
+  Tag,
+  Tooltip,
   Upload,
   type TableProps,
   type UploadFile,
@@ -330,9 +332,7 @@ export default function DeliveryPage() {
             </Button>
           )}
           {canMutate &&
-            (r.status === "out_for_delivery" ||
-              r.status === "picked" ||
-              r.status === "partial") && (
+            (r.status === "out_for_delivery" || r.status === "picked") && (
               <Button
                 size="small"
                 type="primary"
@@ -342,6 +342,15 @@ export default function DeliveryPage() {
                 {t("pages.delivery.complete")}
               </Button>
             )}
+          {/* A partial delivery can never be completed again — the server only
+              accepts picked|out_for_delivery — so offering the button was a
+              dead end that always ended in a toast. Say why it is absent
+              instead of silently removing it. */}
+          {r.status === "partial" && (
+            <Tooltip title={t("pages.delivery.partialHint")}>
+              <Tag color="orange">{t("pages.delivery.partialNoComplete")}</Tag>
+            </Tooltip>
+          )}
         </Space>
       ),
     },

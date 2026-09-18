@@ -21,6 +21,15 @@ interface PickerProps {
   /** The chosen customer, or null. This component never picks one itself. */
   value: Customer | null;
   onChange: (customer: Customer | null) => void;
+  /**
+   * A name taken from the conversation (WeCom alias / company / contact).
+   *
+   * Used ONLY to pre-fill the search box, so the operator starts from the name
+   * they can already see instead of retyping it. It never selects anything:
+   * `value` stays null until a click, and the box is clearable, because a
+   * pre-filled *selection* would be indistinguishable from a verified one.
+   */
+  hint?: string | null;
 }
 
 const PAGE_SIZE = 100;
@@ -35,16 +44,28 @@ const SEARCH_LIMIT = 50;
  * The search box filters on code, either name, phone and delivery zone; the
  * backend's `q` only covers code and names, so the extra fields are filtered
  * here (and a server search runs alongside for customers past the first page).
+ *
+ * `hint` pre-fills that box from the conversation. Each result then says which
+ * field it matched, so a suggestion is *explained* rather than merely offered —
+ * when the WeCom alias is "陈记饭店" and the account is "Chen Restaurant", the
+ * operator needs to see that the link is a phone number, not a name.
  */
-export default function CustomerPicker({ value, onChange }: PickerProps) {
+export default function CustomerPicker({ value, onChange, hint }: PickerProps) {
   const { t, lang } = useLanguage();
   const { token } = theme.useToken();
   const [loaded, setLoaded] = useState<Customer[]>([]);
   const [total, setTotal] = useState(0);
   const [serverHits, setServerHits] = useState<Customer[]>([]);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(hint ?? "");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Re-fill when the conversation changes — the drawer is reused from one held
+  // row to the next, so the box would otherwise keep the previous chat's name.
+  // Keyed on `hint` alone: re-running on anything else would fight the typing.
+  useEffect(() => {
+    setQuery(hint ?? "");
+  }, [hint]);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,12 +128,39 @@ export default function CustomerPicker({ value, onChange }: PickerProps) {
     );
   }, [loaded, serverHits, query]);
 
+  // Which field a row matched on, for the "matched on …" tag. Null when nothing
+  // matched (the unfiltered list), so no tag is shown for it.
+  const matchedField = (c: Customer): string | null => {
+    const q = query.trim().toLowerCase();
+    if (!q) return null;
+    const fields: [string, string | null | undefined][] = [
+      [t("pages.identity.bind.code"), c.code],
+      [t("pages.identity.bind.name"), c.name_zh],
+      [t("pages.identity.bind.name"), c.name_en],
+      [t("pages.identity.bind.contact"), c.contact_name],
+      [t("pages.identity.bind.phone"), c.contact_phone],
+      [t("pages.identity.bind.zone"), c.delivery_zone],
+    ];
+    const hit = fields.find(([, v]) => v && String(v).toLowerCase().includes(q));
+    return hit ? hit[0] : null;
+  };
+
   return (
     <Space direction="vertical" size="small" style={{ width: "100%" }}>
       <Typography.Text strong>{t("pages.identity.bind.searchLabel")}</Typography.Text>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         {t("pages.identity.bind.searchHint")}
       </Typography.Text>
+      {/* Say where the pre-fill came from. Otherwise a box that already has a
+          name in it looks like the system made the choice for the operator. */}
+      {hint ? (
+        <Alert
+          type="info"
+          showIcon
+          message={t("pages.identity.bind.searchFromChat", { name: hint })}
+          description={t("pages.identity.bind.searchFromChatHint")}
+        />
+      ) : null}
       <Input.Search
         allowClear
         value={query}
@@ -160,6 +208,7 @@ export default function CustomerPicker({ value, onChange }: PickerProps) {
             dataSource={matches}
             renderItem={(c) => {
               const selected = value?.id === c.id;
+              const reason = matchedField(c);
               return (
                 <List.Item
                   onClick={() => onChange(selected ? null : c)}
@@ -199,6 +248,14 @@ export default function CustomerPicker({ value, onChange }: PickerProps) {
                         {lang === "zh" ? c.name_en : c.name_zh}
                       </Typography.Text>
                     </Space>
+                    {/* Why this row is in front of you. A filtered list without a
+                        reason is just a shorter list; the operator has to be able
+                        to judge the match, not just accept it. */}
+                    {reason ? (
+                      <Tag color="green" style={{ fontSize: 11, marginInlineEnd: 0 }}>
+                        {t("pages.identity.bind.matchedOn", { field: reason })}
+                      </Tag>
+                    ) : null}
                   </Space>
                 </List.Item>
               );

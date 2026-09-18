@@ -309,11 +309,23 @@ def test_pending_first_floats_unreviewed_to_top(client, admin_headers, require_r
     pending = _submit(client, admin_headers, customer_id, "土豆 2斤")
     _wait_for_job(client, pending, admin_headers)
 
+    # Ask for a full page. The assertion below is about ORDER, and
+    # `pending_first` floats every unreviewed row to the top — so on a database
+    # with more than a page of parked documents the settled row falls off page 1
+    # and this test would fail for a reason unrelated to ordering.
     r = client.get(
-        "/api/v1/intake/documents?pending_first=true", headers=admin_headers
+        "/api/v1/intake/documents",
+        params={"pending_first": "true", "page_size": 100},
+        headers=admin_headers,
     )
     items = r.json()["items"]
     statuses = [d["job_status"] for d in items]
+    # Say which way it failed. Without this the `next()` below raised a bare
+    # StopIteration, which reads as a crash rather than "the page was too small
+    # to prove anything".
+    assert any(s != "needs_review" for s in statuses), (
+        "no settled row on the first page — the ordering cannot be judged"
+    )
     first_done = next(i for i, s in enumerate(statuses) if s != "needs_review")
     assert not any(
         s == "needs_review" for s in statuses[first_done:]

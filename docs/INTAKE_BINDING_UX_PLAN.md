@@ -10,7 +10,7 @@ Companion to `IDENTITY_IMPLEMENTATION_SPEC.md` (Phase 1, 2026-09-14), which desi
 shipped the binding *capability*. This plan covers the *integration* into the intake flow,
 plus four defects found while analysing it.
 
-> Verification note: S0/S2 are verified by the backend suite (464 passed, 2 skipped) and
+> Verification note: S0/S2/S3 are verified by the backend suite (468 passed, 2 skipped) and
 > `npx tsc -b --force` (exit 0). The frontend has **no test runner**, so the end-to-end
 > flow in §5 has **not** been clicked through in a browser — that remains to be done.
 
@@ -191,12 +191,26 @@ Ordered so each is independently shippable and testable. S0 unblocks the rest.
   resume-confirm-after-bind; confirm errors into the inline `Alert` (**D3**).
 - `CustomerPicker` (read-only) or a `CustomerSummary` chip to show the bound customer.
 
-### S3 — Suggestions and polish
-- Suggestion block via `lookup-customer`, with the match reason.
-- *"Releases N held orders"* on the bind button, and a success toast naming N.
-- i18n keys under `pages.intake.bind.*` added to **both** `extra.ts` and `extraZh.ts`.
-  There is no parity test, so a missing `zh` key falls back to English silently — add one
-  or review carefully.
+### S3 — Show who is talking, and start the search from it — SHIPPED
+- **The contact evidence is now on the inbox row.** `_doc_out`'s identity block gained
+  `display_name`, `corp_name`, `alias`, so a held row reads *"Needs customer · 陈记饭店"*
+  instead of an action next to a `chat_key` the operator cannot act on. A conversation
+  WeCom told us nothing about says *"Sender unknown"* rather than leaving a gap.
+- **The picker is pre-filled from the conversation**, and each result names the field it
+  matched (*"matched on Phone"*). `CustomerPicker` takes a `hint`; the drawer passes
+  `alias || corp_name || display_name`.
+- **The pre-fill is a suggestion, never a selection.** `value` stays null until a click,
+  the box is clearable, and an Alert says where the name came from. `searchHint` was
+  reworded, because "nothing is pre-selected" would otherwise have become false.
+
+**Correction to the first draft of this plan.** It proposed sourcing the suggestion from
+the gateway, on the finding that `wecom_block` carries no `remark`/`phone`. That finding
+was accurate but pointed at the wrong block: `_resolve_identity` already writes
+`display_name` / `corp_name` / `alias` into `document_meta["identity"]`
+(`wecom_intake.py:166-172`), and `/identity/unbound` has always returned them. **The data
+was already in the ERP; only the intake serialiser dropped it, so no WeCom1 change is
+needed.** Lesson: check the *identity* block, not only `wecom_block`.
+- i18n keys added to **both** `extra.ts` and `extraZh.ts` (there is still no parity test).
 
 ### S4 — ERP-wide audit of the same anti-pattern
 The intake gate is unlikely to be the only one. Audit every server-side refusal for the D2/D3

@@ -94,6 +94,13 @@ def _doc_out(
     document held for want of a customer looks exactly like a normal one
     otherwise, and the reviewer's only clue was a banner telling them to go and
     bind something they could not identify from the list.
+
+    `display_name` / `corp_name` / `alias` are the same three fields
+    `list_unbound_chats` already exposes, and they are here for the same reason:
+    `status: unbound` tells the reviewer a decision is needed but not *who* is
+    on the other end, so a held row could only be described by its `chat_key`.
+    They are contact metadata forwarded by the gateway, never evidence of
+    identity — the bind is still made on `kind` + `value` alone.
     """
     file_url = f"/api/v1/intake/documents/{doc.id}/file"
     block = identity_block_of(doc)
@@ -118,6 +125,12 @@ def _doc_out(
             "value": block.get("value"),
             "method": block.get("method"),
             "reason": block.get("reason"),
+            # Who is talking, as far as WeCom tells us. Display only — these
+            # name the conversation so a held row is identifiable; they never
+            # resolve a customer.
+            "display_name": block.get("display_name"),
+            "corp_name": block.get("corp_name"),
+            "alias": block.get("alias"),
         },
     }
 

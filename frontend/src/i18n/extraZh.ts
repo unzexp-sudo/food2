@@ -100,6 +100,7 @@ const extraZh = {
         chooseCustomer: "选择客户",
         bindToContinue: "绑定客户后继续",
         confirmFailed: "无法生成订单",
+        unknownSender: "发送方未知",
       },
     },
     warehouse: {
@@ -122,6 +123,9 @@ const extraZh = {
         routeZone: "路线 / 区域",
         driver: "指派司机",
       },
+      partialNoComplete: "部分送达 — 不可再次完成",
+      partialHint:
+        "该送货已按部分送达记录，不能再次确认完成。剩余部分将通过新的送货单送达。",
     },
     finance: {
       statements: {
@@ -193,7 +197,10 @@ const extraZh = {
         rawExcerpt: "识别所依据的原文",
         searchLabel: "查找客户",
         searchPlaceholder: "按编号、名称、电话或配送区域搜索",
-        searchHint: "系统不会预选任何客户，请自行选择。",
+        searchHint: "系统不会预选任何客户。搜索框的预填只是建议，不是选择。",
+        searchFromChat: "已按该会话预填：{{name}}",
+        searchFromChatHint: "未选中任何客户。清空搜索框可查看全部客户。",
+        matchedOn: "匹配字段：{{field}}",
         resultsCount: "{{count}} 条匹配",
         noResults: "没有匹配的客户。",
         showingFirst: "仅显示前 {{count}} 位客户，输入关键字可搜索全部。",
