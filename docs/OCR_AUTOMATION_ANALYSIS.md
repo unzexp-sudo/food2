@@ -164,10 +164,15 @@ can see what *would* be ordered, and a human `confirm-review` is what creates th
      `https://wecom1-production-4bc1.up.railway.app`.
    - `WECOM_ORDER_GROUP_IDS` is empty, so handoffs carry `customer_id=null` and land unbound.
 
-## Known gaps, reported not fixed
+## Known gaps
 
-- A PNG is stored and served as `.jpg` — `normalize_entry` hardcodes `f"{msgid}.jpg"`. Routing is
-  unaffected, but consumers derive `image/jpeg` from the name.
+- **Fixed since this was written** (`bbaf6cf`, WeCom1): a PNG was stored and served as `.jpg`,
+  because `normalize_entry` synthesised `f"{msgid}.jpg"` for every image. `_store_media` now
+  takes the name from the bytes (`sniff_media`), correcting only the extension and only for
+  signatures that are unambiguous — a `.docx` is a ZIP, so `PK\x03\x04` is deliberately not
+  sniffed. Tests: `WeCom1/tests/test_media_sniffing.py`.
 - **No PDF has ever reached the archive** (message types: image 2 / text 18 / other 4 — zero
-  `file`), so the PDF intake path, including the scanned-PDF fallback fixed above, is unverified
-  against real traffic.
+  `file`), so the PDF intake path, including the scanned-PDF fallback fixed in `6144971`, is
+  unverified against real traffic. Send one real PDF to exercise it.
+- The 2 held images currently carry **fabricated** lines. Do not confirm them — retry them after
+  switching on real OCR, so they are re-extracted by the actual provider.
