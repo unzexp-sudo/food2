@@ -260,3 +260,84 @@ def test_admin_jwt_also_accepted_on_wecom_endpoints(  # noqa: F811
     )
     assert r.status_code == 200, r.text
     assert r.json()["found"] is True
+
+
+# ---------------------------------------------------------------------------
+# Attachments — how the bytes actually arrive
+# ---------------------------------------------------------------------------
+#
+# The Gateway and the ERP are separate services with separate filesystems, so
+# `file_path` is a path in the Gateway's container (always `exists() == False`
+# here) and `file_url` only works when `WECOM_MEDIA_URL_BASE` names the Gateway's
+# public origin. Both fail silently — the row is created, the attachment is not —
+# which is indistinguishable from a customer who sent text. Hence `file_b64`.
+
+
+def _resolve(**kwargs):
+    from app.services.intake.wecom_intake import resolve_attachment
+
+    return resolve_attachment(**kwargs)
+
+
+def test_inline_bytes_win_over_a_path_and_a_url():
+    import base64
+
+    data, name, mime = _resolve(
+        file_path="/nonexistent/gateway/container/order.pdf",
+        file_url="http://127.0.0.1:8100/wecom/media/order.pdf",
+        file_b64=base64.b64encode(b"%PDF-1.4 real order").decode(),
+    )
+
+    assert data == b"%PDF-1.4 real order"
+    assert name == "order.pdf", "the extension must survive — it decides pdf vs image"
+    assert mime == "application/pdf"
+
+
+def test_the_filename_falls_back_to_the_path_when_there_is_no_url():
+    import base64
+
+    data, name, _ = _resolve(
+        file_path="/gateway/container/photo.png",
+        file_url=None,
+        file_b64=base64.b64encode(b"\x89PNG").decode(),
+    )
+
+    assert data == b"\x89PNG"
+    assert name == "photo.png"
+
+
+def test_a_missing_attachment_is_reported_as_no_attachment():
+    """Nothing anywhere → (None, None, None), never an exception."""
+    assert _resolve(file_path="/nope/a.pdf", file_url=None, file_b64=None) == (
+        None,
+        None,
+        None,
+    )
+
+
+def test_malformed_inline_bytes_degrade_instead_of_failing():
+    """A garbled inline field must fall through, not lose the order.
+
+    The message is still an order; only the attachment is unusable.
+    """
+    data, name, mime = _resolve(
+        file_path=None,
+        file_url=None,
+        file_b64="not-valid-base64!!!",
+    )
+
+    assert data is None
+    assert name is None
+    assert mime is None
+
+
+def test_an_on_disk_path_still_works_for_a_local_run(tmp_path):
+    """When both apps do share a filesystem (local dev), the path branch is used."""
+    f = tmp_path / "local.pdf"
+    f.write_bytes(b"%PDF-1.4 local")
+
+    data, name, mime = _resolve(file_path=str(f), file_url=None, file_b64=None)
+
+    assert data == b"%PDF-1.4 local"
+    assert name == "local.pdf"
+    assert mime == "application/pdf"

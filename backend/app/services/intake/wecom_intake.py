@@ -15,6 +15,8 @@ provenance lives in `document_meta["wecom"]`:
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import mimetypes
 from pathlib import Path
@@ -107,25 +109,59 @@ def _download(url: str) -> bytes | None:
     return None
 
 
+def _decode_inline(file_b64: str | None) -> bytes | None:
+    """Decode the Gateway's inline attachment, or None when it is unusable.
+
+    Returns None rather than raising: a malformed inline field must degrade to the
+    URL fallback, never fail the intake. The message is still an order.
+    """
+    if not file_b64:
+        return None
+    try:
+        return base64.b64decode(file_b64, validate=True)
+    except (binascii.Error, ValueError):
+        logger.warning("Inline attachment is not valid base64 — falling back to the URL")
+        return None
+
+
 def resolve_attachment(
     *,
     file_path: str | None,
     file_url: str | None,
+    file_b64: str | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """Return (bytes, filename, mime) for a WeCom attachment, or (None, None, None).
 
-    Prefers the on-disk path (the Gateway writes into the shared files dir);
-    falls back to fetching file_url.
+    Order: **inline bytes → on-disk path → file_url.**
+
+    Inline first, and not as a nicety. The Gateway is a separate service with its
+    own filesystem, so the `file_path` branch below is dead in production — the
+    path names a file in the Gateway's container and `exists()` is always False,
+    silently. `file_url` then depends on `WECOM_MEDIA_URL_BASE` naming the
+    Gateway's *public* origin, and its default is the Gateway's own loopback.
+    Only the inline field has no external dependency.
+
+    The filename still comes from the URL or path, because those are the only
+    places the original extension survives — and the extension is what decides
+    whether this is a PDF to parse or a photo to look at.
     """
+    name = (Path(file_url).name if file_url else "") or (
+        Path(file_path).name if file_path else ""
+    )
+    name = name or "attachment"
+
+    data = _decode_inline(file_b64)
+    if data is not None:
+        return data, name, mimetypes.guess_type(name)[0]
+
     if file_path:
         p = Path(file_path)
         if p.exists() and p.is_file():
             return p.read_bytes(), p.name, mimetypes.guess_type(p.name)[0]
     if file_url:
-        data = _download(file_url)
-        if data is not None:
-            name = Path(file_url).name or "attachment"
-            return data, name, mimetypes.guess_type(name)[0]
+        fetched = _download(file_url)
+        if fetched is not None:
+            return fetched, name, mimetypes.guess_type(name)[0]
     return None, None, None
 
 
@@ -209,6 +245,7 @@ def ingest_wecom_message(
     file_bytes, filename, mime = resolve_attachment(
         file_path=payload.get("file_path"),
         file_url=payload.get("file_url"),
+        file_b64=payload.get("file_b64"),
     )
 
     if filename is None and payload.get("file_mime"):

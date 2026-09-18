@@ -211,10 +211,23 @@ Common: `id` (String(36) PK, UUID default), `created_at`, `updated_at`
    | other | status `ignored`, logged |
 6. Extension → source_type map:
    `.pdf → pdf`, `.xlsx/.xls/.csv → excel`, `.png/.jpg/.jpeg/.gif/.bmp/.webp → image`, else `pdf`.
-7. Media is stored under `WECOM_MEDIA_DIR` (default `<repo>/backend/data/files/wecom`)
-   so the ERP can read it from the same disk. `get_storage()` returns the object.
+7. Media is stored under `WECOM_MEDIA_DIR`. **The Gateway and the ERP do NOT share
+   a filesystem in production** — they are separate services — so that path is
+   meaningful only to the Gateway, and `resolve_attachment`'s `file_path` branch is
+   dead there (`exists()` is always False). Attachments reach the ERP as
+   **`file_b64`** in the handoff body (§6); `file_path` and `file_url` remain as
+   fallbacks for a single-disk local run.
 8. Store the row **before** handoff, then update with `intake_job_id` / `status`.
    Handoff failures leave `status=failed` with `error` set — never lose the message.
+9. **Every native SDK call runs in a child process** (`WECOM_SDK_ISOLATE`, default
+   on) — `DecryptData` *and* `GetMediaData`. The vendor blob aborts its process
+   (`free(): invalid pointer`, exit 133) instead of returning an error, so an
+   in-process call does not cost one message, it costs the whole Gateway. That
+   matters most for media: `pull_once` holds the cursor on a failed entry, so a
+   crash mid-attachment is re-attempted on every restart — a permanent loop that
+   also blocks every message queued behind it. A media failure is deliberately
+   *per-attachment*, not global: `POST /wecom/messages/{id}/rehand` clears it once
+   the attachment is readable again.
 
 ---
 
