@@ -4,6 +4,7 @@
  */
 const extraZh = {
   common: {
+    noLines: "请先至少添加一行再提交。",
     view: "查看",
     adjust: "调整",
     generate: "生成",

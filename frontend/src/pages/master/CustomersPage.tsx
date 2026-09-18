@@ -15,7 +15,7 @@ import {
 } from "antd";
 import { EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
-import { api, type Page } from "../../api/client";
+import { api, getApiError, type Page } from "../../api/client";
 import { useList, useMutate } from "../../api/hooks";
 import { pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
@@ -131,6 +131,19 @@ export default function CustomersPage() {
     } catch {
       return;
     }
+    // A duplicate `code` is the one server-side rule this form can predict
+    // (`create_customer` / `update_customer` raise "Customer code already
+    // exists: X" -> 400). Reported only as a toast it left the operator with
+    // an open modal, no field marked, and no clue which value to change.
+    // Mark the offending field; keep the toast.
+    const markDuplicateCode = (error: unknown): string | void => {
+      const detail = getApiError(error);
+      if (detail && /code already exists/i.test(detail)) {
+        form.setFields([{ name: "code", errors: [detail] }]);
+      }
+      return detail ?? undefined;
+    };
+
     if (editing) {
       const ok = await run(() => api.patch(`/customers/${editing.id}`, values), {
         success: t("pages.master.customers.saved"),
@@ -138,6 +151,7 @@ export default function CustomersPage() {
           setEditOpen(false);
           list.refresh();
         },
+        onError: markDuplicateCode,
       });
       void ok;
     } else {
@@ -147,6 +161,7 @@ export default function CustomersPage() {
           setEditOpen(false);
           list.refresh();
         },
+        onError: markDuplicateCode,
       });
       void ok;
     }

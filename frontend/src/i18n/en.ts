@@ -577,6 +577,7 @@ const en = {
         payMethod: "Method",
         payNote: "Note",
         payAmountRequired: "Amount is required",
+        payAmountPositive: "Amount must be greater than 0",
         paymentSuccess: "Payment recorded",
         noLines: "No lines.",
       },

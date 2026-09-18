@@ -120,6 +120,15 @@ export default function QuotationModal({
     }
   };
 
+  // The server requires `lines` to hold at least one entry
+  // (`QuotationCreate.lines = Field(min_length=1)`), so an empty list is a
+  // guaranteed 422. Offering an enabled Submit for it made the operator read a
+  // toast naming a validation rule, with the modal still open and nothing
+  // marked. Disable it and say what is missing — the "Add line" button below the
+  // list is the way out.
+  const noLines =
+    (Form.useWatch<FormLine[] | undefined>("lines", form) ?? []).length === 0;
+
   return (
     <Drawer
       title={initial ? t("pages.quotations.editTitle") : t("pages.quotations.newTitle")}
@@ -127,11 +136,21 @@ export default function QuotationModal({
       onClose={onClose}
       width={720}
       footer={
-        <Space style={{ float: "right" }}>
-          <Button onClick={onClose}>{t("common.cancel")}</Button>
-          <Button type="primary" loading={loading} onClick={handleSubmit}>
-            {t("common.submit")}
-          </Button>
+        <Space direction="vertical" style={{ width: "100%" }} size={8}>
+          {noLines ? (
+            <Typography.Text type="warning">{t("common.noLines")}</Typography.Text>
+          ) : null}
+          <Space style={{ width: "100%", justifyContent: "flex-end" }}>
+            <Button onClick={onClose}>{t("common.cancel")}</Button>
+            <Button
+              type="primary"
+              loading={loading}
+              disabled={noLines}
+              onClick={handleSubmit}
+            >
+              {t("common.submit")}
+            </Button>
+          </Space>
         </Space>
       }
     >

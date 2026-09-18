@@ -160,6 +160,15 @@ export default function OrdersPage() {
   const [form] = Form.useForm();
   const { loading: mutateLoading, run } = useMutate();
 
+  // The server requires `lines` to hold at least one entry
+  // (`OrderCreate.lines = Field(min_length=1)`), so an empty list is a
+  // guaranteed 422. `handleCreate` reads `values.lines.map(...)` unguarded, so
+  // submitting with every line removed also threw a client-side TypeError
+  // before the request was even sent. Disable Submit and say what is missing —
+  // the "Add line" button under the list is the way out.
+  const noLines =
+    (Form.useWatch<NewLine[] | undefined>("lines", form) ?? []).length === 0;
+
   const handleCreate = async () => {
     let values: { customer_id: string; delivery_date: Dayjs; notes?: string; lines: NewLine[] };
     try {
@@ -343,11 +352,21 @@ export default function OrdersPage() {
         onClose={() => setNewOpen(false)}
         width={720}
         footer={
-          <Space style={{ float: "right" }}>
-            <Button onClick={() => setNewOpen(false)}>{t("common.cancel")}</Button>
-            <Button type="primary" loading={mutateLoading} onClick={handleCreate}>
-              {t("common.submit")}
-            </Button>
+          <Space direction="vertical" style={{ width: "100%" }} size={8}>
+            {noLines ? (
+              <Typography.Text type="warning">{t("common.noLines")}</Typography.Text>
+            ) : null}
+            <Space style={{ width: "100%", justifyContent: "flex-end" }}>
+              <Button onClick={() => setNewOpen(false)}>{t("common.cancel")}</Button>
+              <Button
+                type="primary"
+                loading={mutateLoading}
+                disabled={noLines}
+                onClick={handleCreate}
+              >
+                {t("common.submit")}
+              </Button>
+            </Space>
           </Space>
         }
       >

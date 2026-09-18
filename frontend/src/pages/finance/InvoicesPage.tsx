@@ -132,12 +132,14 @@ export default function InvoicesPage() {
   const [payOpen, setPayOpen] = useState(false);
   const [payInvoiceId, setPayInvoiceId] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState<number>(0);
+  const [payAmountError, setPayAmountError] = useState<string | null>(null);
   const [payMethod, setPayMethod] = useState<string>("");
   const [payNote, setPayNote] = useState<string>("");
 
   const openPay = (invoiceId: string, total: number) => {
     setPayInvoiceId(invoiceId);
     setPayAmount(total);
+    setPayAmountError(null);
     setPayMethod("");
     setPayNote("");
     setPayOpen(true);
@@ -145,6 +147,17 @@ export default function InvoicesPage() {
 
   const handlePay = async () => {
     if (!payInvoiceId) return;
+    // `PaymentCreateIn.amount` is `Field(gt=0)`, so a zero amount is a
+    // guaranteed 422. It has to be caught here: the fields in this modal are
+    // plain `useState` values, not `Form.Item name=...` bindings, so `rules`
+    // on those Form.Items never run at all. Refusing it locally keeps the
+    // modal open with the reason shown on the field, instead of sending a
+    // request that can only come back as a toast over an unmarked field.
+    if (!(payAmount > 0)) {
+      setPayAmountError(t("pages.finance.invoices.payAmountPositive"));
+      return;
+    }
+    setPayAmountError(null);
     const ok = await run(
       () =>
         api.post(`/invoices/${payInvoiceId}/payments`, {
@@ -445,16 +458,28 @@ export default function InvoicesPage() {
         okText={t("common.submit")}
       >
         <Form layout="vertical">
+          {/* No `name`, so `rules` here would be inert — this modal drives its
+              fields with useState and the zero check lives in `handlePay`. The
+              message is surfaced through `validateStatus`/`help`, which are the
+              AntD props that work without a bound field. */}
           <Form.Item
             label={t("pages.finance.invoices.payAmount")}
             required
-            rules={[{ required: true, message: t("pages.finance.invoices.payAmountRequired") }]}
+            validateStatus={payAmountError ? "error" : undefined}
+            help={payAmountError}
           >
             <InputNumber
+              // Only keeps negatives out; zero is refused by `handlePay` with a
+              // message. A `min` above zero would instead make InputNumber
+              // silently rewrite a typed 0 into the minimum, recording a 0.01
+              // payment rather than refusing it.
               min={0}
               step={0.01}
               value={payAmount}
-              onChange={(v) => setPayAmount(v ?? 0)}
+              onChange={(v) => {
+                setPayAmount(v ?? 0);
+                setPayAmountError(null);
+              }}
               style={{ width: "100%" }}
             />
           </Form.Item>

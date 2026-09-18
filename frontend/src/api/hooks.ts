@@ -112,6 +112,17 @@ export interface MutateOptions {
   success?: string;
   /** Called after a successful mutation (e.g. refresh a list). */
   onSuccess?: () => void;
+  /**
+   * Called with the raw error when the mutation fails. Return a string to
+   * replace the default toast, or void to keep it.
+   *
+   * This exists because `run()` deliberately reports failures as a toast and
+   * then discards the error — which is fine for a failure with no addressable
+   * cause, but wrong for one the form could point at. A caller that knows
+   * *which field* the server refused (e.g. a duplicate customer code) uses
+   * this to mark that field and still get the toast.
+   */
+  onError?: (error: unknown) => string | void;
 }
 
 /**
@@ -136,7 +147,8 @@ export function useMutate() {
         options?.onSuccess?.();
         return true;
       } catch (error) {
-        message?.error(getApiError(error) ?? t("common.error"));
+        const override = options?.onError?.(error);
+        message?.error(override ?? getApiError(error) ?? t("common.error"));
         return false;
       } finally {
         setLoading(false);

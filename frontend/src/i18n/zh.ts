@@ -577,6 +577,7 @@ const zh = {
         payMethod: "方式",
         payNote: "备注",
         payAmountRequired: "请输入金额",
+        payAmountPositive: "金额必须大于 0",
         paymentSuccess: "付款已登记",
         noLines: "暂无明细。",
       },

@@ -6,6 +6,9 @@
  */
 const extra = {
   common: {
+    // A submit button that the server will refuse for a reason the form could
+    // have known. Shown next to the disabled button, not as a toast.
+    noLines: "Add at least one line before submitting.",
     view: "View",
     adjust: "Adjust",
     generate: "Generate",
