@@ -35,6 +35,52 @@ interface PickerProps {
 const PAGE_SIZE = 100;
 const SEARCH_LIMIT = 50;
 
+/** Every field the search looks at. */
+const searchValues = (c: Customer): (string | null | undefined)[] => [
+  c.code,
+  c.name_zh,
+  c.name_en,
+  c.contact_name,
+  c.contact_phone,
+  c.delivery_zone,
+];
+
+/** The fields a conversation remark is allowed to *contain*. */
+const nameValues = (c: Customer): (string | null | undefined)[] => [
+  c.name_zh,
+  c.name_en,
+  c.contact_name,
+];
+
+/**
+ * Does one field match the query? True in **either** direction.
+ *
+ * `field.includes(q)` is ordinary search — typing "chen" finds "Chen Restaurant".
+ * `q.includes(field)` is what the conversation pre-fill needs, and it was missing
+ * until a browser click-through caught it: a WeCom remark is usually the
+ * customer's own name *plus extra text* ("金龙酒家-王老板"), so demanding that the
+ * whole remark appear inside the customer's name matched nothing in the most
+ * common real-world shape — the operator got an empty list under a search box
+ * that looked like it was helping.
+ *
+ * The reverse direction is restricted to the name fields and needs 2+
+ * characters, so a short code or zone cannot make every customer match.
+ */
+const fieldMatches = (
+  value: string | null | undefined,
+  q: string,
+  reverse = false,
+): boolean => {
+  if (!value) return false;
+  const v = String(value).toLowerCase();
+  if (v.includes(q)) return true;
+  return reverse && v.length >= 2 && q.includes(v);
+};
+
+const customerMatches = (c: Customer, q: string): boolean =>
+  searchValues(c).some((v) => fieldMatches(v, q)) ||
+  nameValues(c).some((v) => fieldMatches(v, q, true));
+
 /**
  * RIGHT COLUMN — the customer picker.
  *
@@ -121,27 +167,24 @@ export default function CustomerPicker({ value, onChange, hint }: PickerProps) {
     for (const c of serverHits) pool.set(c.id, c);
     const all = [...pool.values()];
     if (!q) return all;
-    return all.filter((c) =>
-      [c.code, c.name_en, c.name_zh, c.contact_name, c.contact_phone, c.delivery_zone]
-        .filter(Boolean)
-        .some((field) => String(field).toLowerCase().includes(q)),
-    );
+    return all.filter((c) => customerMatches(c, q));
   }, [loaded, serverHits, query]);
 
-  // Which field a row matched on, for the "matched on …" tag. Null when nothing
-  // matched (the unfiltered list), so no tag is shown for it.
+  // Which field a row matched on, for the "matched on …" tag. Deliberately
+  // mirrors `customerMatches` — same fields, same order, same reverse flags — so
+  // a row can never appear in the list without a reason next to it.
   const matchedField = (c: Customer): string | null => {
     const q = query.trim().toLowerCase();
     if (!q) return null;
-    const fields: [string, string | null | undefined][] = [
-      [t("pages.identity.bind.code"), c.code],
-      [t("pages.identity.bind.name"), c.name_zh],
-      [t("pages.identity.bind.name"), c.name_en],
-      [t("pages.identity.bind.contact"), c.contact_name],
-      [t("pages.identity.bind.phone"), c.contact_phone],
-      [t("pages.identity.bind.zone"), c.delivery_zone],
+    const fields: [string, string | null | undefined, boolean][] = [
+      [t("pages.identity.bind.code"), c.code, false],
+      [t("pages.identity.bind.name"), c.name_zh, true],
+      [t("pages.identity.bind.name"), c.name_en, true],
+      [t("pages.identity.bind.contact"), c.contact_name, true],
+      [t("pages.identity.bind.phone"), c.contact_phone, false],
+      [t("pages.identity.bind.zone"), c.delivery_zone, false],
     ];
-    const hit = fields.find(([, v]) => v && String(v).toLowerCase().includes(q));
+    const hit = fields.find(([, v, reverse]) => fieldMatches(v, q, reverse));
     return hit ? hit[0] : null;
   };
 
