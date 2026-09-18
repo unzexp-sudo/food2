@@ -2,17 +2,20 @@
 
 **Phase 2 UX plan — integrating the binding flow that Phase 1 already built.**
 
-Status: **S0 and S2 are implemented** (`f6181d6`, `57b7bc0`); S1 was done as the
-mechanical means to S2. **S3 and S4 are not.** This document is kept as the record of the
-diagnosis and the reasoning, not as an open proposal.
+Status: **S0, S1, S2, S3 and S4 are all implemented.** S1 was done as the mechanical means to
+S2; S3 shipped as `67781d8` + `8cceb83`; S4 as `d5dad4c`. This document is kept as the record of
+the diagnosis and the reasoning, not as an open proposal.
 
 Companion to `IDENTITY_IMPLEMENTATION_SPEC.md` (Phase 1, 2026-09-14), which designed and
 shipped the binding *capability*. This plan covers the *integration* into the intake flow,
 plus four defects found while analysing it.
 
-> Verification note: S0/S2/S3 are verified by the backend suite (468 passed, 2 skipped) and
-> `npx tsc -b --force` (exit 0). The frontend has **no test runner**, so the end-to-end
-> flow in §5 has **not** been clicked through in a browser — that remains to be done.
+> Verification note: covered by the backend suite (468 passed, 2 skipped) and
+> `npx tsc -b --force` (exit 0). The frontend has **no test runner**, so the end-to-end flow in
+> §5 was instead **clicked through in a browser** against the local stack (2026-09-18) — the
+> held row, the pre-filled drawer, the bind, and each S4 guard were exercised, with the outcome
+> confirmed against the API and the dev DB rather than the DOM alone. That click-through is
+> what found the two defects in §3/S4 that static reasoning had missed.
 
 ---
 
@@ -220,7 +223,7 @@ very field the row is missing. A UI suggestion list needs the opposite shape —
 the name we *do* have, return several candidates, and say why each matched.
 - i18n keys added to **both** `extra.ts` and `extraZh.ts` (there is still no parity test).
 
-### S4 — ERP-wide audit of the same anti-pattern
+### S4 — ERP-wide audit of the same anti-pattern — SHIPPED
 The intake gate is unlikely to be the only one. Audit every server-side refusal for the D2/D3
 shape — *does the UI show an enabled action that can only fail, and report it as a toast?*
 Known candidates, each needing verification:
@@ -231,6 +234,28 @@ Known candidates, each needing verification:
 - Customer duplicate `code` → `HTTP 400 {"detail": "Customer code already exists: …"}`
   (`customers.py:115`); is that a field-level error or a toast?
 - Quotation / PO-receive validation refusals.
+
+**Outcome — five confirmed instances, all fixed.** The first two were closed in the earlier
+audit pass; the rest in `d5dad4c`.
+
+| Instance | Fix |
+|---|---|
+| Standing-order "create order" posted no body while `contracts.py` requires one | `api.post(url, {})` |
+| A `partial` delivery offered a Complete button the server always refuses | button removed; `Tag` + `Tooltip` explain the absence |
+| Empty `lines` on a new order / quotation (`min_length=1`) | Submit disabled behind an inline hint |
+| Duplicate customer `code` → 400 → toast, field left unmarked | new optional `useMutate` `onError` marks the field |
+| Payment `amount` of 0 (`gt=0`) | refused locally, message shown on the field |
+
+**One of these was nearly made worse by its own fix, and the lesson generalises.** The first
+payment-amount attempt added a `min: 0.01` rule to a `Form.Item` that has **no `name`** — so
+AntD never registered the control as a field and the rule was **inert** — *and* `min={0.01}` on
+the `InputNumber`, which does not refuse a value but **rewrites** it. The typed `0` became
+`0.01`, passed validation, and a 0.01 payment was **recorded**: strictly worse than the toast it
+replaced. `tsc` was clean throughout. Only clicking the screen and then reading the DB exposed
+it.
+
+> **`min` on an input is a rewriter, not a refusal.** A guard must refuse, and the only proof is
+> what the server received — a dialog closing is not evidence that validation held.
 
 Deliverable: a short list of confirmed instances, each with the fix, so the principle is
 applied consistently rather than one page at a time.
