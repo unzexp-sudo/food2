@@ -362,3 +362,44 @@ def test_the_flag_agrees_with_what_the_handler_does(client, admin_headers, requi
     assert [c["template"] for c in calls] == ["intake_needs_review"], (
         "health said the ping was configured, but no ping went out"
     )
+
+
+# ---------------------------------------------------------------------------
+# Gate 1 (intake triage) mode
+# ---------------------------------------------------------------------------
+#
+# The gate shipped with a default of "shadow", which classifies every message
+# and then hides nothing. That is indistinguishable from a broken filter from
+# the outside: chatter keeps arriving, the code looks correct, and no surface in
+# the product said which mode was running. It was read as "the filter does not
+# work" for exactly that reason. The mode is now reported, so the next person
+# can read the answer instead of inferring it.
+
+
+def test_health_reports_the_triage_mode(client):
+    body = client.get("/api/health").json()
+    from app.core.config import settings
+
+    assert body["intake_triage_mode"] == (settings.intake_triage_mode or "").lower()
+
+
+def test_the_triage_mode_default_is_enforce():
+    """The gate is product behaviour, not an experiment left switched off.
+
+    A default of "shadow" is what let non-orders reach the inbox while every
+    test stayed green, so the default itself is the thing worth pinning.
+    """
+    from app.core.config import Settings
+
+    assert Settings().intake_triage_mode == "enforce"
+
+
+def test_health_follows_the_mode_when_it_is_changed(client, monkeypatch):
+    """A field that cannot change is a constant, not a reading."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "intake_triage_mode", "shadow")
+    assert client.get("/api/health").json()["intake_triage_mode"] == "shadow"
+
+    monkeypatch.setattr(settings, "intake_triage_mode", "off")
+    assert client.get("/api/health").json()["intake_triage_mode"] == "off"

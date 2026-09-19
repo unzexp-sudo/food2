@@ -84,6 +84,8 @@ interface IntakeDocWithJob extends IntakeDocument {
   identity?: DocIdentity | null;
   /** Why a human refused this document, when one did. */
   rejection?: DocRejection | null;
+  /** Why Gate 1 set this document aside, when it did. */
+  triage?: DocTriage | null;
 }
 
 /**
@@ -99,6 +101,28 @@ interface DocRejection {
   note?: string | null;
   by?: string | null;
   at?: string | null;
+}
+/**
+ * Gate 1's verdict, from `_doc_out`.
+ *
+ * A parked row used to say only `parked`, which is not reviewable: the operator
+ * cannot tell "this really was a greeting" from "the classifier misfired", so a
+ * wrong park was invisible and stayed wrong. Same argument as a rejection — the
+ * reason is the whole point of having decided anything.
+ *
+ * `reasons` is the classifier's own diagnostic text and is deliberately NOT
+ * translated: it names the rule that fired ("greeting only (你好)"), which is
+ * the thing that makes the decision checkable. Translating it would hide the
+ * evidence behind a second layer of interpretation.
+ */
+interface DocTriage {
+  decision: string;
+  tier: string;
+  score: number;
+  reasons: string[];
+  excerpt?: string | null;
+  parked: boolean;
+  overridden: boolean;
 }
 /**
  * The conversation's binding state, from `_doc_out`.
@@ -510,6 +534,15 @@ export default function IntakePage() {
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                 {t(`pages.intake.review.rejectReason.${r.rejection.reason}`)}
                 {r.rejection.note ? ` — ${r.rejection.note}` : ""}
+              </Typography.Text>
+            ) : null}
+            {/* Gate 1's reason, on the same principle as a rejection: a row that
+                says only "parked" cannot be judged, and a park nobody can judge
+                never gets promoted back. Without this the Parked view is a list
+                of rows the operator has to take on faith. */}
+            {r.job_status === "parked" && r.triage?.reasons?.length ? (
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {r.triage.reasons.join("; ")}
               </Typography.Text>
             ) : null}
           </Space>

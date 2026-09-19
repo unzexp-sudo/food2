@@ -27,7 +27,12 @@ from app.core.database import get_db
 from app.core.deps import require_service_or_roles
 from app.core.pagination import page_response
 from app.models import Customer, CustomerContact, IntakeJob, User
-from app.services.intake.service import _doc_out, _job_out, customers_for
+from app.services.intake.service import (
+    _doc_out,
+    _job_out,
+    backfill_triage_parks,
+    customers_for,
+)
 from app.services.intake.triage import NOT_ORDER
 from app.services.intake.wecom_intake import ingest_wecom_message, list_wecom_documents
 
@@ -233,6 +238,32 @@ def triage_report(
         # are excluded — they are visible again.
         "actually_parked_count": actually_parked,
     }
+
+
+@router.post("/wecom/triage-backfill")
+def triage_backfill(
+    apply: bool = Query(
+        default=False,
+        description="Set true to actually park. The default is a dry run.",
+    ),
+    db: Session = Depends(get_db),
+    actor: User | None = Depends(require_service_or_roles("ops")),
+):
+    """Park the chatter already sitting in the inbox, judged by its own verdict.
+
+    Gate 1 only governs messages that arrive *after* it is switched on, so
+    turning enforcement on does not clean up what the inbox already holds — the
+    operator keeps looking at the same junk and concludes the filter still does
+    not work. This applies the live rule to the WeCom documents that already
+    carry a verdict.
+
+    **Dry run by default**: call it, read `would_park`, then call it again with
+    `apply=true`. Parking hides rows, so acting on a list nobody previewed is
+    how a real order disappears. Nothing already confirmed into an order,
+    rejected by a human, or overridden by a human is touched, and every park is
+    reversible with `POST /intake/jobs/{id}/promote`.
+    """
+    return backfill_triage_parks(db, apply=apply, actor=actor)
 
 
 @router.get("/wecom-messages")

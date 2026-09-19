@@ -13,14 +13,23 @@ So: classify first. Only plausible orders become intake documents.
 Design
 ------
 Tier 0 — deterministic. Empty, emoji-only, greetings, acknowledgements,
-    system events. Also: an attachment is treated as an order, because the
-    customer's habit is "photo the handwritten list and send it" and 95% of
-    attachments really are orders. They still get reviewed; triage is not a
-    substitute for Gate 2.
+    system events, and a question with nothing ordered in it ("where is this
+    account??", "多少钱一斤？"). Also: an attachment is treated as an order,
+    because the customer's habit is "photo the handwritten list and send it"
+    and 95% of attachments really are orders. They still get reviewed; triage
+    is not a substitute for Gate 2.
+
+    Tier 0 is the ONLY tier that is ever parked, so anything added here must be
+    safe to hide from a human. That is why a question is only Tier 0 when it
+    carries no quantity, no digit and no order verb: "能送点土豆过来吗？" is an
+    order wearing a question mark and must stay in the inbox.
 
 Tier 1 — Chinese heuristics. Quantities with units (50斤 / 2箱 / 10公斤) are
     the strongest signal; order verbs (要/订/来/送/补), multiple lines and
     delivery-time mentions add weight. Score against a threshold.
+    **A Tier 1 "not_order" is never parked** — the score cannot tell
+    "几点送？" (not an order) from "能送点土豆过来吗？" (an order); both are -1.
+    See the park rule in `services/intake/wecom_intake.py`.
 
 Tier 2 — LLM, for whatever lands in "unclear". Not built yet; unclear
     currently falls through to "order", because dropping a real order is far
@@ -299,6 +308,40 @@ def _classify(
                         reasons=[f"{label} opens the message, nothing ordered ({w})"],
                         signals=signals,
                     )
+
+    verbs = [v for v in _ORDER_VERBS if v in lowered]
+
+    # --- Tier 0d: a message that is ONLY a question -------------------------
+    # "where is this account??", "多少钱一斤？", "货到了吗". A customer asking
+    # something is not placing an order, and that judgement is deterministic —
+    # so it belongs in Tier 0, the only tier that is ever parked.
+    #
+    # It used to be a mere -3 penalty in the Tier 1 score. The consequence was
+    # the worst of both worlds: the message was correctly *classified* as
+    # not_order and then still handed to the intake inbox, because Tier 1 is
+    # never enforced. A question therefore reached a human either way, which is
+    # the exact cost Gate 1 exists to remove.
+    #
+    # Each exclusion below is load-bearing; together they are the safety
+    # argument for parking a question at all:
+    #   * a quantity+unit is an order however the sentence is punctuated —
+    #     "明天几点能送到？要 50斤土豆" must survive;
+    #   * a bare digit is enough to deserve a human glance;
+    #   * an order verb is how a Chinese order is phrased as a request —
+    #     "能送点土豆过来吗？" is an order, not an enquiry. Without this the
+    #     rule would quietly drop real orders that happen to end in a question
+    #     mark, which is a lost sale rather than a saved glance.
+    if (
+        _looks_like_question(text_body)
+        and not qty_matches
+        and not _BARE_NUMBER_RE.search(text_body)
+        and not verbs
+    ):
+        return TriageVerdict(
+            decision=NOT_ORDER, score=0, tier="tier0",
+            reasons=["a question with nothing ordered — not an order"],
+            signals=signals,
+        )
 
     if qty_matches:
         # Strongest signal in this domain, and a single one must be enough:

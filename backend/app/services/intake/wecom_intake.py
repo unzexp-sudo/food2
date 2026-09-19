@@ -283,11 +283,22 @@ def ingest_wecom_message(
     )
     # Only Tier 0 verdicts are ever parked. Tier 0 is deterministic — empty,
     # emoji-only, or a message that is nothing but a greeting / ack / system
-    # event — so the odds of a real order hiding in there are negligible.
-    # Tier 1 "not_order" is a heuristic score (a bare product name with no
-    # quantity scores 0) and stays ingested: dropping a real order costs far
-    # more than one extra row in the inbox, which is the same asymmetry that
-    # made "unclear" count as an order in the first place.
+    # event / a question with nothing ordered — so the odds of a real order
+    # hiding in there are negligible.
+    #
+    # Tier 1 "not_order" stays ingested, and the reason is worth stating
+    # because "why not park every not_order?" is the obvious next question.
+    # A Tier 1 non-order is a *heuristic score*, and the score cannot separate
+    # a question about a delivery from an order phrased as one. Both of these
+    # score exactly -1:
+    #
+    #     "几点送？"             — what time is delivery — not an order
+    #     "能送点土豆过来吗？"    — can you send some potatoes — IS an order
+    #
+    # Parking on `score < 0` was tried and rejected for that reason: it drops
+    # the second one, and a dropped order is a lost sale, not a saved glance.
+    # The asymmetry is the same one that makes "unclear" count as an order and
+    # that makes a bare product name ("土豆", score 0) stay in the inbox.
     should_park = (
         mode == "enforce"
         and verdict.decision == "not_order"

@@ -164,6 +164,59 @@ def test_verdict_serializes_for_storage():
     assert isinstance(d["reasons"], list)
 
 
+# --- Questions: parked when they ask, kept when they might order --------------
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "where is this account??",
+        "这个多少钱？",
+        "有没有土豆",
+        "什么时候能到",
+    ],
+)
+def test_a_question_with_nothing_ordered_is_tier0(text):
+    """Tier 0, not Tier 1 — and the tier is the whole point.
+
+    A question used to be a mere -3 penalty in the Tier 1 score, so the message
+    was correctly classified `not_order` and then still handed to a human,
+    because Tier 1 is never parked. "where is this account??" arrived in the
+    intake inbox as a document to review, which is the reported bug.
+    """
+    v = classify(text)
+    assert v.decision == NOT_ORDER, v.reasons
+    assert v.tier == "tier0", (
+        f"{text!r} is Tier {v.tier}, which is never parked, so it still reaches "
+        f"the inbox: {v.reasons}"
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "能送点土豆过来吗？",     # an order wearing a question mark
+        "几点送？",               # a timing question — ambiguous, so not parkable
+        "明天能送50斤吗",         # a question carrying a quantity
+        "还有没有土豆，来 10斤",   # an enquiry that turns into an order
+    ],
+)
+def test_a_question_that_might_be_an_order_is_never_parkable(text):
+    """The guard on the rule above: every exclusion in it exists for one of these.
+
+    Parking is exactly `decision == not_order and tier == tier0`, so that is
+    what must never hold here. "能送点土豆过来吗？" is the load-bearing case: it
+    is classified `not_order` at Tier 1 with the same score (-1) as the genuine
+    non-order "几点送？", so any rule that parks on the score alone drops a real
+    order. If someone 'simplifies' the question rule to "anything with a
+    question mark", this fails — which is the point.
+    """
+    v = classify(text)
+    assert not (v.decision == NOT_ORDER and v.tier == "tier0"), (
+        f"{text!r} became parkable (score {v.score}: {v.reasons}) — a real order "
+        "can now be hidden from the inbox"
+    )
+
+
 # --- Shadow mode: the ingest path records but does not change behaviour -------
 
 SERVICE_HEADERS = {"X-ERP-Service-Key": "dev-service-key"}
@@ -179,8 +232,18 @@ def _post_wecom(client, msgid: str, content: str) -> dict:
     return r.json()
 
 
-def test_shadow_mode_records_verdict_but_still_creates_a_job(client):  # noqa: F811
-    """Shadow must be invisible: the job is created exactly as before."""
+def test_shadow_mode_records_verdict_but_still_creates_a_job(client, monkeypatch):  # noqa: F811
+    """Shadow must be invisible: the job is created exactly as before.
+
+    The mode is pinned rather than assumed. It used to rely on shadow being the
+    default, which meant it asserted the absence of a mode instead of the
+    behaviour of one — so it broke the moment enforcement became the default,
+    without shadow mode itself changing at all.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "intake_triage_mode", "shadow")
+
     body = _post_wecom(client, "wm-triage-shadow-1", "你好")
     assert body["job_id"], "shadow mode must not change behaviour"
 

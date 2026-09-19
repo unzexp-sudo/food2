@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.services.identity.service import identity_block_of, is_unbound
 from app.services.intake.company_proposal import build_company_proposal
+from app.services.intake.triage import NOT_ORDER
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +212,11 @@ def _doc_out(
     meta = doc.document_meta or {}
     return {
         "rejection": meta.get("review_rejection"),
+        # Why Gate 1 set this aside, when it did. Same argument as `rejection`
+        # above: a parked row reads "parked" and nothing else, so the operator
+        # cannot judge whether the classifier was right — and a wrong park that
+        # nobody can evaluate is a wrong park that never gets promoted back.
+        "triage": _triage_out(doc),
         "id": doc.id,
         "customer_id": doc.customer_id,
         "customer_name_en": customer.name_en if customer else None,
@@ -238,6 +244,35 @@ def _doc_out(
             "corp_name": block.get("corp_name"),
             "alias": block.get("alias"),
         },
+    }
+
+
+def _triage_out(doc: IntakeDocument) -> dict | None:
+    """The Gate 1 verdict recorded for this document, or None if never judged.
+
+    Reads the live location first (`meta["wecom"]["triage"]`, where the ingest
+    path and `promote` both write) and falls back to `meta["triage"]` for the
+    copy `promote` keeps in step. Returns None rather than a default verdict on
+    purpose: "never classified" and "classified as an order" are different
+    facts, and a placeholder would make them look the same.
+    """
+    meta = doc.document_meta or {}
+    if not isinstance(meta, dict):
+        return None
+    wecom = meta.get("wecom")
+    verdict = wecom.get("triage") if isinstance(wecom, dict) else None
+    if not verdict:
+        verdict = meta.get("triage")
+    if not isinstance(verdict, dict) or not verdict:
+        return None
+    return {
+        "decision": verdict.get("decision"),
+        "tier": verdict.get("tier"),
+        "score": verdict.get("score"),
+        "reasons": list(verdict.get("reasons") or []),
+        "excerpt": verdict.get("excerpt"),
+        "parked": bool(verdict.get("parked")),
+        "overridden": bool(verdict.get("overridden")),
     }
 
 
@@ -573,8 +608,150 @@ def promote_parked_job(
     return job
 
 
-# --- Reject -------------------------------------------------------------------
+# --- Gate 1 backfill ----------------------------------------------------------
 
+# The job states a message can still be in when nobody has decided anything
+# about it yet. `completed` is excluded deliberately: a human confirmed it and
+# an order exists, so parking it would hide a real order. `rejected` is already
+# a human decision, and `failed` wants a retry rather than a park.
+_PRE_REVIEW_JOB_STATUSES = frozenset({"queued", "processing", "needs_review"})
+
+
+def backfill_triage_parks(
+    db: Session,
+    *,
+    apply: bool = False,
+    actor: User | None = None,
+) -> dict:
+    """Park messages already in the inbox that Gate 1 says are not orders.
+
+    `intake_triage_mode` governs messages arriving *from now on*, so switching
+    the gate on leaves every piece of chatter ingested while it was in "shadow"
+    sitting in the queue — the fix would be invisible on the exact screen the
+    operator is looking at. This walks the WeCom documents that already carry a
+    verdict and applies the rule the ingest path now applies: `not_order`
+    **and** Tier 0.
+
+    Tier 0 only, for the same reason the live gate is Tier 0 only — a Tier 1
+    score cannot separate "几点送？" from "能送点土豆过来吗？", and parking the
+    second one loses a real order. See the park rule in
+    `services/intake/wecom_intake.py`.
+
+    **Dry run by default.** This hides rows from the inbox, and a hide nobody
+    previewed is how a real order goes missing. Pass `apply=True` to act.
+
+    Only jobs still awaiting attention are touched. Anything already confirmed
+    into an order, rejected by a human, or failed to parse is left alone,
+    because parking those would hide work rather than noise.
+
+    Reversible throughout — a parked message stays visible under
+    `status=parked` and `POST /intake/jobs/{id}/promote` puts it back, because
+    the original bytes were stored at ingest time.
+    """
+    docs = [
+        d
+        for d in db.query(IntakeDocument).all()
+        if isinstance(d.document_meta or {}, dict)
+        and isinstance((d.document_meta or {}).get("wecom"), dict)
+    ]
+
+    would_park: list[dict] = []
+    scanned = 0
+    unclassified = 0
+    overridden = 0
+    already_parked = 0
+    settled = 0
+
+    for doc in docs:
+        scanned += 1
+        block = (doc.document_meta or {}).get("wecom") or {}
+        verdict = block.get("triage") or {}
+        if not verdict:
+            # Ingested before triage existed: nothing ever judged it, so there
+            # is no verdict to act on and this must not guess.
+            unclassified += 1
+            continue
+        if verdict.get("overridden"):
+            # A human already promoted it. Re-parking would undo a decision.
+            overridden += 1
+            continue
+        if verdict.get("parked"):
+            already_parked += 1
+            continue
+        if verdict.get("decision") != NOT_ORDER or verdict.get("tier") != "tier0":
+            continue
+
+        job = (
+            db.query(IntakeJob)
+            .filter(IntakeJob.document_id == doc.id)
+            .order_by(IntakeJob.retry_count.desc(), IntakeJob.created_at.desc())
+            .first()
+        )
+        if job is None or job.status not in _PRE_REVIEW_JOB_STATUSES:
+            settled += 1
+            continue
+
+        reasons = list(verdict.get("reasons") or [])
+        would_park.append(
+            {
+                "document_id": doc.id,
+                "job_id": job.id,
+                "job_status": job.status,
+                "msgid": block.get("msgid"),
+                "excerpt": (verdict.get("excerpt") or "")[:120],
+                "reasons": reasons,
+            }
+        )
+        if not apply:
+            continue
+
+        before = _job_out(job)
+        job.status = "parked"
+        db.flush()
+
+        # Keep the stored verdict in step, so `/triage-report` reads this as
+        # parked rather than merely "would be", and a later promote flips the
+        # same field it flips for a message parked at ingest time. `job.error`
+        # is deliberately left alone: the normal park path leaves it None, and
+        # the reason belongs in the verdict where the report already looks.
+        meta = dict(doc.document_meta or {})
+        block = dict(block)
+        new_verdict = dict(verdict)
+        new_verdict["parked"] = True
+        new_verdict["parked_by"] = "backfill"
+        block["triage"] = new_verdict
+        meta["wecom"] = block
+        meta["triage"] = new_verdict
+        doc.document_meta = meta
+        flag_modified(doc, "document_meta")
+        db.flush()
+
+        log_audit(
+            db, actor, "IntakeJob", job.id, "triage_backfill_park",
+            before=before, after=_job_out(job),
+            summary=(
+                f"Backfill parked intake job {job.id} as a non-order "
+                f"({'; '.join(reasons) or 'no reason recorded'})"
+            ),
+        )
+
+    if apply and would_park:
+        db.commit()
+
+    return {
+        "applied": bool(apply),
+        "scanned": scanned,
+        "would_park_count": len(would_park),
+        "parked_count": len(would_park) if apply else 0,
+        "unclassified": unclassified,
+        "overridden": overridden,
+        "already_parked": already_parked,
+        "settled": settled,
+        "would_park": would_park,
+    }
+
+
+# --- Reject -------------------------------------------------------------------
 # Why an order was thrown away. Fixed codes rather than free text, because a note
 # cannot be counted: "how many duplicates did we get this week?" is a question
 # someone will ask, and the answer has to come out of the data. `duplicate` is

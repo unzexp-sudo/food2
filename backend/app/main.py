@@ -204,6 +204,13 @@ def health():
         # so it has to be visible: "false" means a figure-only page is flagged
         # for human transcription and nothing more.
         "vision_fallback_enabled": settings.vision_fallback_enabled,
+        # Gate 1 (intake triage). "shadow" means the classifier runs and records
+        # a verdict but hides nothing, so everyday chatter still reaches the
+        # inbox — behaviour identical to a filter that is broken, with no
+        # symptom to tell the two apart. Report the mode so "the gate is off"
+        # is a fact you can read instead of infer. "enforce" is the default;
+        # see `Settings.intake_triage_mode`.
+        "intake_triage_mode": (settings.intake_triage_mode or "").lower(),
     }
 
 

@@ -2,12 +2,19 @@
 
 In shadow mode triage only *records* a verdict; every message still becomes an
 intake document, so the inbox is still flooded. This is the part that stops
-the flooding.
+the flooding, and **enforce is now the default** — shadow is the opt-in
+observing mode, so tests that want it pin it with the `shadow` fixture.
 
 The safety rule that matters most here: **only Tier 0 verdicts are parked.**
-Tier 0 is deterministic (empty, emoji-only, or a message that is nothing but a
-greeting/ack/system event). Tier 1 "not_order" is a heuristic score and stays
-ingested, because dropping a real order costs far more than an extra row.
+Tier 0 is deterministic — empty, emoji-only, a greeting/ack/system event, or a
+question with nothing ordered in it. Tier 1 "not_order" is a heuristic score
+and stays ingested, because the score cannot tell these two apart:
+
+    "几点送？"             — what time is delivery — not an order, score -1
+    "能送点土豆过来吗？"    — can you send some potatoes — IS an order, score -1
+
+Parking on the score alone therefore drops a real order, which costs far more
+than an extra row in the inbox.
 """
 from __future__ import annotations
 
@@ -61,11 +68,27 @@ def enforce(monkeypatch):
     return None
 
 
-# --- Shadow mode is still the default ---------------------------------------
+@pytest.fixture
+def shadow(monkeypatch):
+    """Pin shadow mode explicitly.
+
+    These tests used to rely on shadow being the *default*. That made them
+    assert the absence of a mode rather than the behaviour of one, so they
+    passed for the wrong reason the moment enforcement became the default —
+    and a test that fails when a default changes is not testing shadow mode at
+    all. Pinning it keeps the test honest in both directions.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "intake_triage_mode", "shadow")
+    return None
 
 
-def test_shadow_mode_ingests_chatter(client, admin_headers):
-    """Default behaviour is unchanged: chatter still lands in the inbox."""
+# --- Shadow mode: observe without hiding ------------------------------------
+
+
+def test_shadow_mode_ingests_chatter(client, admin_headers, shadow):
+    """Shadow changes nothing: chatter still lands in the inbox."""
     r = _post(client, admin_headers, "你好", "shadow-1")
     assert r.status_code == 201, r.text
     job = _job_for(client, admin_headers, r.json()["job_id"])
@@ -132,6 +155,33 @@ def test_enforce_does_not_park_tier1_not_order(client, admin_headers, enforce):
     assert r.status_code == 201, r.text
     job = _job_for(client, admin_headers, r.json()["job_id"])
     assert job["status"] != "parked", "tier1 (heuristic) verdict was parked"
+
+
+def test_enforce_parks_a_question_that_asks_for_nothing(client, admin_headers, enforce):
+    """The reported bug: "where is this account??" reached the intake inbox.
+
+    It *was* classified `not_order` — and still arrived, because the verdict was
+    Tier 1 and only Tier 0 is parked. So the message looked like an order to
+    review while the classifier had already called it correctly. The tier is
+    what this test pins.
+    """
+    r = _post(client, admin_headers, "where is this account??", "enf-q1")
+    assert r.status_code == 201, r.text
+    job = _job_for(client, admin_headers, r.json()["job_id"])
+    assert job["status"] == "parked", f"a question entered the review queue: {job['status']}"
+
+
+def test_enforce_never_parks_an_order_phrased_as_a_question(client, admin_headers, enforce):
+    """The counterexample that keeps Tier 1 out of the park rule.
+
+    "能送点土豆过来吗？" is an order, and it scores the same -1 as the genuine
+    non-order "几点送？". If the park rule is ever widened to "any not_order",
+    this is the test that fails — which is exactly why it exists.
+    """
+    r = _post(client, admin_headers, "能送点土豆过来吗？", "enf-q2")
+    assert r.status_code == 201, r.text
+    job = _job_for(client, admin_headers, r.json()["job_id"])
+    assert job["status"] != "parked", "an order phrased as a question was parked"
 
 
 def test_parked_messages_are_hidden_from_the_inbox(client, admin_headers, enforce):
@@ -208,3 +258,57 @@ def test_review_count_reports_parked_separately(client, admin_headers, enforce):
     assert "parked" in body
     assert body["parked"] >= 1
     assert "pending_review" in body
+
+
+# --- The parked row must explain itself --------------------------------------
+
+
+def _doc(client, headers, document_id: str) -> dict:
+    r = client.get(f"/api/v1/intake/documents/{document_id}", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_the_inbox_row_carries_the_reason_it_was_parked(client, admin_headers, enforce):
+    """A parked row that says only "parked" is not reviewable.
+
+    The operator has to be able to tell "this really was a greeting" from "the
+    classifier misfired" — otherwise the Parked view is a list of decisions
+    nobody can check, and a wrong park stays wrong. The row is the only place
+    that evidence can live, because the parked row is all they see.
+    """
+    r = _post(client, admin_headers, "你好", "why-1")
+    doc = _doc(client, admin_headers, r.json()["document_id"])
+
+    assert doc["job_status"] == "parked"
+    assert doc["triage"] is not None, "a parked row carries no verdict to review"
+    assert doc["triage"]["reasons"], "a parked row carries no reason"
+    assert doc["triage"]["tier"] == "tier0"
+    assert doc["triage"]["parked"] is True
+
+
+def test_a_message_that_was_never_classified_reports_no_verdict(client, admin_headers, enforce):
+    """"never judged" and "judged as an order" are different facts.
+
+    A placeholder verdict would make an unclassified row look like a decision
+    that was made, which is exactly the confusion this field exists to remove.
+    """
+    from app.core.database import SessionLocal
+    from app.models import IntakeDocument
+    from sqlalchemy.orm.attributes import flag_modified
+
+    r = _post(client, admin_headers, "土豆 50斤", "why-2")
+    document_id = r.json()["document_id"]
+
+    with SessionLocal() as db:
+        doc = db.get(IntakeDocument, document_id)
+        meta = dict(doc.document_meta or {})
+        wecom = dict(meta.get("wecom") or {})
+        wecom.pop("triage", None)
+        meta["wecom"] = wecom
+        meta.pop("triage", None)
+        doc.document_meta = meta
+        flag_modified(doc, "document_meta")
+        db.commit()
+
+    assert _doc(client, admin_headers, document_id)["triage"] is None
