@@ -130,6 +130,7 @@ const extra = {
       // looks arbitrary, and an operator cannot tell a corrected mistake from
       // a classifier that changed its mind for no reason.
       parkedReclassified: "Re-judged: was {{previous}}",
+      parkedByBackfill: "Parked by a later cleanup pass, not when it arrived",
       parkedHint:
         "These looked like chatter, not orders. If one is actually an order, promote it back into the queue.",
       promote: "Promote",

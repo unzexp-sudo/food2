@@ -450,6 +450,43 @@ def test_a_row_whose_verdict_did_not_change_reports_no_superseded_verdict(
     )
 
 
+def test_a_backfill_park_says_it_was_a_backfill(client, admin_headers, shadow, require_review):
+    """"Why did a day-old hi just vanish?" has to be answerable on the row.
+
+    A message the gate parks as it arrives and one a cleanup parks days later
+    look identical in the inbox otherwise, and only the second one is
+    surprising to the person who had been looking at it.
+    """
+    job_id, _ = _chatter(client, admin_headers, content="hi")
+    _backfill(client, admin_headers, apply=True)
+
+    triage = _document(client, admin_headers, job_id)["triage"]
+    assert triage["parked"] is True
+    assert triage["parked_by"] == "backfill", (
+        "a cleanup park is indistinguishable from one the gate made on arrival"
+    )
+
+
+def test_a_park_made_at_ingest_does_not_claim_to_be_a_backfill(
+    client, admin_headers, require_review
+):
+    """The other direction, so the field means something.
+
+    Enforced from the start, this message is parked as it arrives. If the
+    ingest path ever wrote `parked_by`, the field would be true of every row
+    and would stop distinguishing anything.
+    """
+    r = _post(client, "hi", _msgid())
+    assert r.status_code == 201, r.text
+    job_id = r.json()["job_id"]
+    assert _job(client, admin_headers, job_id)["status"] == "parked"
+
+    triage = _document(client, admin_headers, job_id)["triage"]
+    assert triage["parked_by"] is None, (
+        "the gate claimed a cleanup pass parked this when it did so on arrival"
+    )
+
+
 def test_rejudging_does_not_park_a_long_order_that_opens_with_a_question(
     client, admin_headers, shadow, require_review
 ):

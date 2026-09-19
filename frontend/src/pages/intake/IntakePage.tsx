@@ -137,6 +137,13 @@ interface DocTriage {
     tier?: string | null;
     score?: number | null;
   } | null;
+  /**
+   * Set only by the backfill. Absent means the gate parked the message as it
+   * arrived; `"backfill"` means a cleanup pass reached back and parked a
+   * message that had been sitting in the inbox. Without it a day-old "hi"
+   * vanishing from the queue has no explanation on screen.
+   */
+  parked_by?: string | null;
 }
 /**
  * The conversation's binding state, from `_doc_out`.
@@ -568,6 +575,16 @@ export default function IntakePage() {
                 {t("pages.intake.parkedReclassified", {
                   previous: `${r.triage.previous.tier} / ${r.triage.previous.decision}`,
                 })}
+              </Typography.Text>
+            ) : null}
+            {/* Only for a cleanup park. A message the gate parked as it
+                arrived needs no note; one parked days later does, or the
+                operator is left wondering who moved it. */}
+            {r.job_status === "parked" &&
+            r.triage?.parked_by === "backfill" &&
+            !r.triage?.previous ? (
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {t("pages.intake.parkedByBackfill")}
               </Typography.Text>
             ) : null}
           </Space>

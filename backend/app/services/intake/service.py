@@ -279,6 +279,12 @@ def _triage_out(doc: IntakeDocument) -> dict | None:
         # one question the field exists to answer -- "this was an order
         # yesterday, why is it parked today?" -- is unanswerable from the row.
         "previous": verdict.get("previous"),
+        # Set only by the backfill. Absent means the gate parked the message as
+        # it arrived; "backfill" means a cleanup pass reached back and parked a
+        # message that had already been sitting in the inbox. The operator
+        # asking "why did a day-old 'hi' just disappear?" needs that
+        # distinction, and a write nothing reads is not an answer.
+        "parked_by": verdict.get("parked_by"),
     }
 
 
