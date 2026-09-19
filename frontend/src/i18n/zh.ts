@@ -242,7 +242,11 @@ const zh = {
         colProduct: "商品",
         colQty: "数量",
         colUnit: "单位",
-        colConf: "置信度",
+        colConf: "匹配度",
+        colConfHint:
+          "识别出的名称与商品档案的匹配程度，并非 OCR 的置信度。OCR 置信度见顶部标签。",
+        ocrLabel: "OCR",
+        ocrNotRun: "OCR 未执行",
       },
     },
     orders: {

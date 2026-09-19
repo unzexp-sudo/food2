@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App as AntdApp,
+  AutoComplete,
   Button,
   Drawer,
   Image,
@@ -561,20 +562,39 @@ export default function IntakeReviewDrawer({
       key: "product",
       render: (_: unknown, r) => (
         <Space direction="vertical" size={2} style={{ width: "100%" }}>
-          <Select
+          {/* `AutoComplete`, not `Select`: a plain Select can only PICK an
+              option, so a name the OCR mis-read — precisely the case this
+              screen exists for — could not be typed. A combobox fires
+              `onChange` with the raw text on every keystroke, so the operator
+              can correct the name to anything, catalogued or not. */}
+          <AutoComplete
             size="small"
-            showSearch
             style={{ width: "100%", minWidth: 140 }}
-            optionFilterProp="label"
-            value={r.product_name || undefined}
+            value={r.product_name}
             placeholder={t("pages.intake.review.pickProduct")}
             options={productOptions}
+            // Combobox mode disables rc-select's default filtering
+            // (`filterOption=false`), so match on the visible label as well as
+            // the stored value or a Chinese label would never filter.
+            filterOption={(input, option) => {
+              const q = input.trim().toLowerCase();
+              if (!q) return true;
+              return (
+                String(option?.label ?? "").toLowerCase().includes(q) ||
+                String(option?.value ?? "").toLowerCase().includes(q)
+              );
+            }}
             onChange={(v) => {
+              // `v` is whatever was typed, not a catalog-only pick. On clear it
+              // is `undefined`; map that to "" so the required-product guard
+              // fires instead of the key being dropped and the original OCR
+              // name silently surviving into the order.
+              const name = v ?? "";
               if (r.added) {
                 const found = added.find((a) => `a${a.key}` === r.key);
-                if (found) editAdded(found.key, { product_name: v });
+                if (found) editAdded(found.key, { product_name: name });
               } else if (r.line_no !== null) {
-                editLine(r.line_no, { product_name: v });
+                editLine(r.line_no, { product_name: name });
               }
             }}
           />
@@ -615,27 +635,48 @@ export default function IntakeReviewDrawer({
       key: "unit",
       width: 104,
       render: (_: unknown, r) => (
-        <Select
+        // Same reason as Product: a unit the OCR mis-read ("把" read as "斤")
+        // has to be typeable, and the correct unit need not exist in the unit
+        // table. `AutoComplete` gives suggestions without restricting input.
+        <AutoComplete
           size="small"
-          showSearch
           allowClear
           style={{ width: "100%" }}
-          optionFilterProp="label"
-          value={r.unit || undefined}
+          value={r.unit ?? undefined}
           options={unitOptions}
+          filterOption={(input, option) => {
+            const q = input.trim().toLowerCase();
+            if (!q) return true;
+            return (
+              String(option?.label ?? "").toLowerCase().includes(q) ||
+              String(option?.value ?? "").toLowerCase().includes(q)
+            );
+          }}
           onChange={(v) => {
+            const unit = v ?? null;
             if (r.added) {
               const found = added.find((a) => `a${a.key}` === r.key);
-              if (found) editAdded(found.key, { unit: v ?? null });
+              if (found) editAdded(found.key, { unit });
             } else if (r.line_no !== null) {
-              editLine(r.line_no, { unit: v ?? null });
+              editLine(r.line_no, { unit });
             }
           }}
         />
       ),
     },
     {
-      title: t("pages.intake.review.colConf"),
+      // "Match", not "Confidence". This cell is `pmatch.confidence` — how well
+      // the read name matched a catalogue product (`catalog_exact` /
+      // `alias_exact`). It is NOT an OCR score, and it is populated even when
+      // no OCR ran at all: the mock's canned lines matched the catalogue and
+      // rendered as a green 95% on a document nobody had read. A header that
+      // says Confidence is what let that look like a successful read, so the
+      // header says what the number actually measures.
+      title: (
+        <Tooltip title={t("pages.intake.review.colConfHint")}>
+          <span>{t("pages.intake.review.colConf")}</span>
+        </Tooltip>
+      ),
       key: "conf",
       width: 104,
       render: (_: unknown, r) =>
@@ -962,9 +1003,23 @@ export default function IntakeReviewDrawer({
                 ? t("pages.intake.review.needsReview")
                 : t("pages.intake.review.verifyTitle")}
             </Typography.Text>
-            {typeof raw.ocr_overall_confidence === "number" && (
-              <ConfidenceTag value={raw.ocr_overall_confidence} />
-            )}
+            {typeof raw.ocr_overall_confidence === "number" ? (
+              <Space size={4}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {t("pages.intake.review.ocrLabel")}
+                </Typography.Text>
+                <ConfidenceTag value={raw.ocr_overall_confidence} />
+              </Space>
+            ) : sourceType === "image" || sourceType === "pdf" ? (
+              // A visual source with no OCR score means the page was never
+              // read. Saying nothing here is what let the mock's canned lines
+              // pass for a real read: the rows carried a green 95% and nothing
+              // anywhere said the image had not been opened. The reason is in
+              // `parser_notes` ("image OCR not available in mock provider").
+              <Tooltip title={raw.parser_notes}>
+                <Tag color="red">{t("pages.intake.review.ocrNotRun")}</Tag>
+              </Tooltip>
+            ) : null}
             {raw.form_type && <Tag color="blue">{raw.form_type}</Tag>}
             {raw.is_handwritten && <Tag color="volcano">handwritten</Tag>}
             {sourceType && <Tag>{sourceType}</Tag>}

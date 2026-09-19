@@ -242,7 +242,11 @@ const en = {
         colProduct: "Product",
         colQty: "Qty",
         colUnit: "Unit",
-        colConf: "Confidence",
+        colConf: "Match",
+        colConfHint:
+          "How well the read name matched a product in the catalogue — NOT how confident the OCR was. Check the OCR score in the header.",
+        ocrLabel: "OCR",
+        ocrNotRun: "OCR did not run",
       },
     },
     orders: {
