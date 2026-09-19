@@ -37,6 +37,7 @@ from app.models import (
     Unit,
 )
 from app.services.identity import assert_document_bound, is_unbound
+from app.services.intake.service import materialize_original
 from app.services.orders.orders import prefill_delivery_from_customer
 
 
@@ -148,12 +149,18 @@ def process_intake_job(db: Session, job_id: str) -> None:
 
         # Step 2 + 3: classify + extract raw lines via the adapter
         extractor = get_extractor()
-        extraction = extractor.extract(
-            source_type=document.source_type,
-            raw_text=document.document_meta.get("raw_text") if document.document_meta else None,
-            file_path=document.file_path,
-            original_filename=document.original_filename,
-        )
+        # The extractor wants a path and opens it itself, so the row's bytes are
+        # materialised for the duration of the call and removed afterwards. This
+        # is what makes a re-parse possible at all: before, this line handed over
+        # `document.file_path`, a path inside a container that had since been
+        # replaced, and every retry failed on a file that no longer existed.
+        with materialize_original(db, document) as source_path:
+            extraction = extractor.extract(
+                source_type=document.source_type,
+                raw_text=document.document_meta.get("raw_text") if document.document_meta else None,
+                file_path=source_path,
+                original_filename=document.original_filename,
+            )
 
         # QA gate result. For the mock provider this is always False; for the
         # real OCR providers (aliyun_qwen) it is set by apply_review_gate and

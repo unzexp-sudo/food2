@@ -1,15 +1,21 @@
 """Intake service — file storage, document/job CRUD, pipeline orchestration.
 
-The service owns the file-storage logic (sha256 hash, path on disk) and the
-creation of IntakeDocument + IntakeJob rows. The background pipeline
-(app/ai/pipeline.py) is invoked via FastAPI BackgroundTasks.
+The service owns the file-storage logic (sha256 hash, bytes in the row, path on
+disk as a cache) and the creation of IntakeDocument + IntakeJob rows. The
+background pipeline (app/ai/pipeline.py) is invoked via FastAPI BackgroundTasks.
 """
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
+import tempfile
 import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
@@ -27,6 +33,8 @@ from app.models import (
 )
 from app.services.identity.service import identity_block_of, is_unbound
 from app.services.intake.company_proposal import build_company_proposal
+
+logger = logging.getLogger(__name__)
 
 
 # --- Helpers ------------------------------------------------------------------
@@ -51,18 +59,110 @@ def _ext_for(source_type: str, filename: str | None, raw_text: str | None) -> st
     return defaults.get(source_type, ".bin")
 
 
+@dataclass(frozen=True)
+class StoredOriginal:
+    """Where an intake original ended up: in the row, and maybe also on disk."""
+
+    file_data: bytes
+    file_hash: str
+    file_path: str | None
+
+
 def _store_original(
     *,
     source_type: str,
     content: bytes,
     filename: str | None,
-) -> tuple[str, str]:
-    """Write the original bytes to disk. Returns (file_path, file_hash)."""
+) -> StoredOriginal:
+    """Keep the original's bytes in the row, and *cache* them on disk.
+
+    The bytes are the record; the path is an optimisation. That ordering is the
+    entire point of this function. `settings.files_path()` points inside the
+    container, and a container filesystem is discarded on every redeploy — so a
+    document stored as a path alone stops existing the moment the service
+    restarts. That is not a theoretical loss: it is why the review screen shows
+    "File not found on disk" for anything uploaded before the last deploy, and
+    why those documents can never be re-parsed, retried or corrected.
+
+    The disk copy is kept because it is free and because it keeps local
+    development, and the synchronous PDF company proposal, working exactly as
+    they did before. It is strictly best-effort: a disk that is full or read-only
+    must not fail an ingest that the database can serve perfectly well.
+    """
     ext = _ext_for(source_type, filename, content)
     file_name = f"{uuid.uuid4().hex}{ext}"
-    path = settings.files_path("intake", file_name)
-    path.write_bytes(content)
-    return str(path), _sha256(content)
+
+    path: str | None = None
+    try:
+        disk_path = settings.files_path("intake", file_name)
+        disk_path.write_bytes(content)
+        path = str(disk_path)
+    except OSError:
+        # Worth a warning, not a failure: this is the cache, not the record.
+        logger.warning(
+            "intake: could not cache original %s on disk — it is still stored in "
+            "the database and can be served from there",
+            file_name,
+            exc_info=True,
+        )
+
+    return StoredOriginal(
+        file_data=content,
+        file_hash=_sha256(content),
+        file_path=path,
+    )
+
+
+def _suffix_of(doc: IntakeDocument) -> str:
+    """The extension to give the temp file, from whichever field still has it."""
+    if doc.original_filename and "." in doc.original_filename:
+        return Path(doc.original_filename).suffix.lower()
+    if doc.file_path and "." in doc.file_path:
+        return Path(doc.file_path).suffix.lower()
+    return _ext_for(doc.source_type, None, None)
+
+
+@contextmanager
+def materialize_original(db: Session, doc: IntakeDocument) -> Iterator[str]:
+    """Yield a real filesystem path holding this document's original.
+
+    Every extractor takes a *path* and opens it itself (`PdfReader`, `openpyxl`,
+    `open(..., "rb")` inside the OCR adapters), so the bytes have to become a
+    file for the duration of a read. The tempting alternative — pass the bytes
+    around in memory — means rewriting every reader for no gain.
+
+    It is a context manager, and the file is deleted on the way out even when
+    extraction raises, because a Mistral conversion takes seconds to a minute
+    and a temp file per document would otherwise accumulate for the lifetime of
+    the container.
+
+    The disk cache is preferred when it is present only because it is already
+    there; it is never trusted to be there, which is the bug this replaces.
+    """
+    if doc.file_path:
+        cached = Path(doc.file_path)
+        if cached.exists():
+            yield str(cached)
+            return
+
+    data = doc.file_data
+    if not data:
+        raise FileNotFoundError(
+            "the original for this document is not available — it was stored "
+            "before originals were kept in the database, and the container "
+            "copy it pointed at is gone"
+        )
+
+    fd, tmp = tempfile.mkstemp(suffix=_suffix_of(doc), prefix="intake-")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        yield tmp
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:  # pragma: no cover - already gone is the desired state
+            pass
 
 
 def customers_for(db: Session, docs: list[IntakeDocument]) -> dict[str, Customer]:
@@ -207,8 +307,10 @@ def submit_intake(
 ) -> tuple[IntakeDocument, IntakeJob]:
     """Create IntakeDocument + IntakeJob(queued), kick off background pipeline.
 
-    For raw_text, write it to a .txt file so we keep an immutable original.
-    For uploaded files, store the bytes as-is.
+    The original is kept byte-for-byte on the document row itself, whatever the
+    source: a typed message is stored as its UTF-8 bytes, an upload as-is. That
+    is what makes the preview renderable and a bad read re-runnable after the
+    container has been replaced. See `_store_original`.
 
     `parked=True` creates the document with a job in the terminal `parked`
     state and does NOT run the pipeline — Gate 1 decided this is not an order,
@@ -231,7 +333,7 @@ def submit_intake(
     else:
         raise ValueError("Either raw_text or file must be provided")
 
-    file_path, file_hash = _store_original(
+    stored = _store_original(
         source_type=source_type,
         content=content,
         filename=original_filename,
@@ -245,10 +347,13 @@ def submit_intake(
 
     # Company pre-fill (§2.2): a proposal for the bind screen, nothing more.
     # It is stored next to the document, never on `customers`.
+    # Reads the disk cache, so it is best-effort by construction: when the cache
+    # is unavailable (read-only disk) the proposal is simply not made, and the
+    # ingest still succeeds. A PDF's proposal is an enhancement, never a gate.
     proposal = build_company_proposal(
         raw_text=raw_text,
         source_type=source_type,
-        file_path=file_path,
+        file_path=stored.file_path,
         filename=original_filename,
     )
     if proposal is not None:
@@ -258,8 +363,9 @@ def submit_intake(
         customer_id=customer_id,
         source_type=source_type,
         original_filename=original_filename,
-        file_path=file_path,
-        file_hash=file_hash,
+        file_path=stored.file_path,
+        file_hash=stored.file_hash,
+        file_data=stored.file_data,
         uploaded_by=actor.id if actor else None,
         document_meta=meta,
     )

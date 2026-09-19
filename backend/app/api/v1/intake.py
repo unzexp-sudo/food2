@@ -28,6 +28,7 @@ import json
 from datetime import date
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -36,6 +37,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     status,
 )
 from fastapi.responses import FileResponse
@@ -330,6 +332,22 @@ def _inline_media_type(path: str | None) -> str:
     )
 
 
+def _content_disposition(name: str, *, inline: bool) -> str:
+    """`inline; filename=…`, matching what FileResponse would have sent.
+
+    Built by hand because the bytes are now served from the row rather than
+    from a file, so FileResponse — which owns this header — is no longer in the
+    path. Same two-branch shape it uses: a plain ASCII name is quoted, anything
+    else is RFC 5987 percent-encoded, which is what keeps a Chinese filename
+    from arriving as mojibake.
+    """
+    kind = "inline" if inline else "attachment"
+    encoded = quote(name)
+    if encoded != name:
+        return f"{kind}; filename*=utf-8''{encoded}"
+    return f'{kind}; filename="{name}"'
+
+
 @router.get("/documents/{document_id}/file", response_class=FileResponse)
 def download_document_file(
     document_id: str,
@@ -348,19 +366,44 @@ def download_document_file(
     `inline=1` is what the review screen uses to put the source next to the
     parse. The default is unchanged — a download with an opaque content type —
     so every existing caller behaves as before.
+
+    The bytes come from the row, and the disk is only a fallback. Serving from
+    `doc.file_path` is what produced "File not found on disk" for every document
+    uploaded before the last redeploy — the path pointed into a container that
+    no longer existed, so the preview was blank and the failure looked like a
+    frontend bug rather than a storage one. The fallback stays for rows written
+    before this column existed, and for local development.
     """
     doc = get_document(db, document_id)
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
-    if not doc.file_path or not Path(doc.file_path).exists():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found on disk")
-    return FileResponse(
-        path=doc.file_path,
-        media_type=(
-            _inline_media_type(doc.file_path) if inline else "application/octet-stream"
-        ),
-        filename=doc.original_filename or "intake",
-        content_disposition_type="inline" if inline else "attachment",
+
+    name = doc.original_filename or "intake"
+    media_type = (
+        _inline_media_type(doc.original_filename or doc.file_path)
+        if inline
+        else "application/octet-stream"
+    )
+    disposition = _content_disposition(name, inline=inline)
+
+    if doc.file_data:
+        return Response(
+            content=doc.file_data,
+            media_type=media_type,
+            headers={"Content-Disposition": disposition},
+        )
+
+    if doc.file_path and Path(doc.file_path).exists():
+        return FileResponse(
+            path=doc.file_path,
+            media_type=media_type,
+            filename=name,
+            content_disposition_type="inline" if inline else "attachment",
+        )
+
+    raise HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        "The original for this document is no longer available",
     )
 
 

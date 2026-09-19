@@ -237,3 +237,6 @@ def init_db() -> None:
     _add_column_if_missing("orders", "delivery_contact_phone", "VARCHAR(50)")
     _add_column_if_missing("orders", "delivery_confirmed_at", "DATETIME")
     _add_column_if_missing("orders", "delivery_confirmed_by", "VARCHAR(36)")
+    # The intake original itself, not just a path to it. A path into the
+    # container is lost on the next deploy; see `models/intake.py`.
+    _add_column_if_missing("intake_documents", "file_data", "BLOB")

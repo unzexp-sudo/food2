@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import TimestampMixin, UUIDMixin
@@ -18,6 +18,16 @@ class IntakeDocument(TimestampMixin):
     original_filename: Mapped[str | None] = mapped_column(String(500))
     file_path: Mapped[str | None] = mapped_column(String(1000))
     file_hash: Mapped[str | None] = mapped_column(String(64))
+    # The original bytes themselves. `file_path` names a file in *this
+    # container*, and a container filesystem does not survive a redeploy: every
+    # intake document older than the last deploy 404s on its own preview and
+    # can never be re-parsed. Postgres does survive, so the bytes live here and
+    # the path is a cache.
+    #
+    # `deferred=True` is load-bearing, not a micro-optimisation. The inbox lists
+    # 50 documents per request and a photo is megabytes; without it, rendering a
+    # list would pull every blob into memory to print filenames.
+    file_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     uploaded_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
     document_meta: Mapped[dict] = mapped_column(JSON, default=dict)  # JSON
 
