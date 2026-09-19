@@ -32,6 +32,7 @@ from app.models import Delivery, Invoice, Order, PurchaseOrder, User
 from app.services.identity import service as identity_svc
 from app.services.intake import service as intake_svc
 from app.services.orders import orders as orders_svc
+from app.services.warehouse import inbound as inbound_svc
 from app.services.warehouse import picklists as pick_svc
 
 
@@ -45,7 +46,7 @@ ROLE_SECTIONS: dict[str, set[str]] = {
     "consolidation": {"admin", "ops"},
     "purchase_orders": {"admin", "ops"},
     "identity_chats": {"admin", "ops"},
-    "inbound": {"admin", "warehouse"},
+    "inbound": {"admin", "finance"},
     "pick_lists": {"admin", "warehouse"},
     "delivery": {"admin", "warehouse", "driver"},
     "invoices": {"admin", "finance"},
@@ -99,11 +100,13 @@ def collect(db: Session, *, user: User) -> dict[str, int]:
         # deliberate even though it is partly waiting on the wholesaler — the
         # ERP has no "the truck has arrived" signal, so this is the only place
         # that obligation can be visible.
-        out["inbound"] = (
-            db.query(PurchaseOrder)
-            .filter(PurchaseOrder.status.in_(("sent", "partially_received")))
-            .count()
-        )
+        #
+        # The count comes from the service that renders the page, NOT from a
+        # query written here. It used to be a hand-written status filter in this
+        # function, next to an Inbound page that listed a different table
+        # entirely: the badge read 2 and the screen was empty, and nothing tied
+        # the two together so nothing could notice.
+        out["inbound"] = inbound_svc.count_awaiting_receipts(db)
 
     if "pick_lists" in sections:
         # Items still to pick. Exactly the rows on the Pick Lists screen that

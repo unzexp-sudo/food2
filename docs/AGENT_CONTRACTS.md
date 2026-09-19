@@ -305,10 +305,7 @@ POST /purchase-orders/{id}/cancel R: ops/admin
 ### warehouse (warehouse agent)
 ```
 GET  /purchase-orders/{id}/received   → summary of receipts vs PO (also embedded in PO detail)
-POST /inbound-receipts          {po_id, lines: [{po_line_id, quantity_received, quantity_damaged?, notes?}]}  R: warehouse/admin
-       → creates receipt, flags discrepancies, updates PO status (partially_received/received),
-         emits pick list regeneration for the affected delivery date, records inventory movements
-GET  /inbound-receipts?po_id=
+       R: warehouse/ops/finance
 GET  /pick-lists?delivery_date=&status=
 GET  /pick-lists/{id}
 POST /pick-lists/{id}/lines/{line_id}/pick   {picked_quantity}   R: warehouse/admin
@@ -318,13 +315,33 @@ POST /pick-lists/{id}/lines/{line_id}/pick   {picked_quantity}   R: warehouse/ad
          order that is never dispatched never becomes `fulfilled`.
 POST /pick-lists/generate       {delivery_date}  manual regen    R: warehouse/admin
 GET  /pick-lists/task-count     → {open_lines, pending_pick_lists, orders_awaiting_pick_list,
-                                   awaiting_dates[]}   R: warehouse/admin
+                                   awaiting_dates[]}   R: warehouse/ops
        → `open_lines` is the nav badge. `orders_awaiting_pick_list` counts consolidated
          orders whose delivery date has NO pick list at all: confirming or consolidating
          an order does not generate one, so until somebody presses Generate the warehouse
          has no row to look at and the screen has to say so out loud.
 GET  /inventory?product_id=     → movements ledger  R: warehouse/admin
 POST /inventory/loss            {product_id, quantity, reason}   R: warehouse/admin
+```
+
+### inbound receipts (finance — moved from warehouse 2026-09-19)
+```
+GET  /inbound-receipts/awaiting → paged POs owed a receipt, with the batch delivery date
+       → {id, po_number, status, wholesaler_*, delivery_date, sent_at, line_count,
+          total_ordered, total_received, quantity_outstanding}
+       → This is the Inbound nav badge and the first table on /finance/inbound. They call
+         ONE service function (`inbound.count_awaiting_receipts`) so the number and the
+         screen cannot disagree. No cost prices: whoever checks the delivery note against
+         the truck does not need what we pay for it.
+       → Declared BEFORE `/{receipt_id}`, or "awaiting" is parsed as a receipt id.
+GET  /inbound-receipts?po_id=   → paged receipt history   R: finance/ops/warehouse
+GET  /inbound-receipts/{id}     → one receipt + lines (the View-lines drawer)
+POST /inbound-receipts          {po_id, lines: [{po_line_id, quantity_received, quantity_damaged?, notes?}]}
+       R: finance/admin   ← was warehouse
+       → creates receipt, flags discrepancies, updates PO status (partially_received/received),
+         emits pick list regeneration for the affected delivery date, records inventory movements.
+       → The warehouse keeps READ access on the three GETs but is 403 on this POST. Posting a
+         receipt is what creates stock and what the wholesaler's invoice is reconciled against.
 ```
 
 ### work-queue (any authenticated role)
@@ -338,6 +355,12 @@ GET  /work-queue                → {section: count}   R: any authenticated user
          identity_chats.
        → `app/services/workqueue.ROLE_SECTIONS` and `AdminLayout.WORK_BADGES` must agree;
          `tests/test_work_queue.py` parses the TSX and fails if they drift.
+       → **A badge must be countable from the page it points at.** The Inbound badge once
+         counted POs owed a receipt while its page listed receipts: the badge read 2 and the
+         table was empty. `tests/test_work_queue.py::test_the_badge_count_matches_the_rows_
+         the_page_can_show` asserts the equality for every section that is a list, and
+         `_BADGE_NOT_A_LIST` names the ones that are not, with the reason — so a new section
+         cannot be added without deciding.
 ```
 
 ### delivery (warehouse agent)
@@ -423,10 +446,10 @@ Build it by walking: `order_line → consolidation_batch_lines → purchase_orde
   /consolidation             Consolidation dashboard
   /purchase-orders           PO list
   /purchase-orders/:id       PO detail
-  /warehouse/inbound         Inbound receipts
   /warehouse/pick-lists      Pick lists
   /warehouse/inventory       Inventory ledger
   /delivery                  Delivery board
+  /finance/inbound           Inbound receipts (moved from /warehouse/inbound 2026-09-19)
   /finance/invoices          Invoices
   /finance/statements        AR/AP statements
   /finance/margin            Margin report
@@ -445,7 +468,7 @@ Build it by walking: `order_line → consolidation_batch_lines → purchase_orde
   - A hidden tab does not poll; `visibilitychange` ticks immediately, so returning to the app is never up to 15s stale.
   - Badge toasts fire on **increase only**, and never on the first reading — with no baseline, "went up" would mean "this app has a queue".
 - **Badges come from the server, never from a page-local count.** A new gated section is added by (1) a count in `app/services/workqueue.collect`, (2) an entry in `ROLE_SECTIONS`, (3) an entry in `AdminLayout.WORK_BADGES` whose `roles` match the nav item's, and (4) `nav.newWork.*` keys in both `en.ts` and `zh.ts`. `tests/test_work_queue.py` fails if (2) and (3) disagree — a typo there goes quiet rather than erroring.
-- Role-based UI: hide menu items the role can't use (roles: admin sees all; ops: intake/orders/consolidation/POs/master; warehouse: warehouse/delivery; finance: finance + read orders; driver: delivery).
+- Role-based UI: hide menu items the role can't use (roles: admin sees all; ops: intake/orders/consolidation/POs/master; warehouse: pick-lists/inventory/delivery; finance: inbound/invoices/statements/margin + read orders; driver: delivery).
 - Dates: display `YYYY-MM-DD`; datetimes `YYYY-MM-DD HH:mm`.
 - Confidence: API 0–1 → display as percent, color: ≥0.95 green, ≥0.7 orange, else red.
 - Every page: AntD `Table` + filters in a card; detail pages/drawers for edit forms. Keep it clean and dense — this is an ops tool.

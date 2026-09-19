@@ -15,7 +15,7 @@ batch delivery_date (see picklists.regenerate_for_date).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,7 @@ from app.models import (
     PurchaseOrder,
     PurchaseOrderLine,
     User,
+    Wholesaler,
 )
 
 
@@ -93,6 +94,98 @@ def list_receipts(
     total = q.count()
     rows = q.order_by(InboundReceipt.received_at.desc()).all()
     return [serialize_receipt(db, r) for r in rows], total
+
+
+def get_receipt(db: Session, receipt_id: str) -> dict | None:
+    """One receipt with its lines — the `View lines` drawer.
+
+    This route did not exist: the page called `GET /inbound-receipts/{id}` and
+    the router only had `""`, so the button 404'd and the drawer rendered "no
+    lines" for every receipt ever created. A 404 swallowed by a `.catch()` is
+    indistinguishable from an empty receipt.
+    """
+    r = db.get(InboundReceipt, receipt_id)
+    return serialize_receipt(db, r) if r is not None else None
+
+
+def _awaiting_receipt_rows(db: Session) -> list[tuple[PurchaseOrder, date | None]]:
+    """POs the warehouse is owed, with the date the goods are due.
+
+    The date lives on the consolidation batch, not the PO, so it is joined in
+    here rather than left for the caller to fetch per row.
+    """
+    rows = (
+        db.query(PurchaseOrder, ConsolidationBatch.delivery_date)
+        .outerjoin(ConsolidationBatch, ConsolidationBatch.id == PurchaseOrder.batch_id)
+        .filter(PurchaseOrder.status.in_(sorted(RECEIVABLE_PO_STATUSES)))
+        .all()
+    )
+    # Due first, then anything with no batch (a hand-raised PO) by number.
+    return sorted(rows, key=lambda r: (r[1] is None, r[1] or date.min, r[0].po_number))
+
+
+def list_awaiting_receipts(db: Session) -> tuple[list[dict], int]:
+    """`GET /inbound-receipts/awaiting` — the work, not the history.
+
+    This is the list the Inbound badge counts. It exists because the page used
+    to render *receipts* while the badge counted *purchase orders awaiting a
+    receipt*: the badge read 2 and the table was empty, and the operator had no
+    way to tell a broken badge from a real one.
+
+    It also closes a harder dead end. The page built its PO picker from
+    `GET /purchase-orders`, which requires `ops`/`finance` — so for a warehouse
+    user that request was a 403, caught and discarded, and the picker was
+    **permanently empty**. The role that was supposed to receive goods had no
+    way to name one.
+
+    Deliberately returns no `cost_price` and no `total_amount`: whoever checks
+    the truck against the delivery note does not need what we pay for it.
+    """
+    out: list[dict] = []
+    for po, delivery_date in _awaiting_receipt_rows(db):
+        lines = (
+            db.query(PurchaseOrderLine)
+            .filter(PurchaseOrderLine.po_id == po.id)
+            .all()
+        )
+        total_ordered = sum((ln.quantity_ordered or 0.0) for ln in lines)
+        total_received = sum((ln.quantity_received or 0.0) for ln in lines)
+        outstanding = sum(
+            max((ln.quantity_ordered or 0.0) - (ln.quantity_received or 0.0), 0.0)
+            for ln in lines
+        )
+        wholesaler = db.get(Wholesaler, po.wholesaler_id) if po.wholesaler_id else None
+        out.append({
+            "id": po.id,
+            "po_number": po.po_number,
+            "status": po.status,
+            "wholesaler_id": po.wholesaler_id,
+            "wholesaler_name_en": wholesaler.name_en if wholesaler else "",
+            "wholesaler_name_zh": wholesaler.name_zh if wholesaler else "",
+            "delivery_date": delivery_date.isoformat() if delivery_date else None,
+            "sent_at": po.sent_at.isoformat() if po.sent_at else None,
+            "line_count": len(lines),
+            "total_ordered": total_ordered,
+            "total_received": total_received,
+            "quantity_outstanding": outstanding,
+        })
+    return out, len(out)
+
+
+def count_awaiting_receipts(db: Session) -> int:
+    """The Inbound nav badge — the same predicate as the page it badges.
+
+    Shared with `list_awaiting_receipts` on purpose. The previous badge was a
+    hand-written `status IN ('sent', 'partially_received')` inside
+    `workqueue.collect`, next to a page that read a different table entirely;
+    nothing tied them together, so nothing could tell them apart when they
+    disagreed. A badge that disagrees with its page is worse than no badge.
+    """
+    return (
+        db.query(PurchaseOrder)
+        .filter(PurchaseOrder.status.in_(sorted(RECEIVABLE_PO_STATUSES)))
+        .count()
+    )
 
 
 def po_received_summary(db: Session, po: PurchaseOrder) -> dict:

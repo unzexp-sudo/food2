@@ -1,8 +1,10 @@
 """WAREHOUSE MODULE — owner: warehouse/delivery agent.
 
 Implements (see docs/AGENT_CONTRACTS.md §5):
-  POST /inbound-receipts          R: warehouse/admin
-  GET  /inbound-receipts          paged; filter po_id
+  POST /inbound-receipts          R: finance/admin  (moved from warehouse 2026-09-19)
+  GET  /inbound-receipts          paged; filter po_id   R: finance/ops/warehouse
+  GET  /inbound-receipts/awaiting POs owed, not yet received — the Inbound badge
+  GET  /inbound-receipts/{id}     one receipt + lines (the View-lines drawer)
   GET  /purchase-orders/{id}/received → receipts summary for a PO
   GET  /pick-lists                paged; filters delivery_date, status
   GET  /pick-lists/task-count     → outstanding work for the nav badge  R: warehouse/ops
@@ -15,6 +17,13 @@ Implements (see docs/AGENT_CONTRACTS.md §5):
 Multi-router pattern: inbound_router (/api/v1/inbound-receipts),
 pick_router (/api/v1/pick-lists), inv_router (/api/v1/inventory),
 plus the PO-received sub-resource lives on `router` with prefix /api/v1.
+
+**Inbound receipts are finance's now**, even though the code lives in this
+module: the page, the route (`/finance/inbound`) and the badge all moved, and
+`POST` is finance-only. The warehouse keeps read access. Moving the *code* to
+`services/finance/` was not worth it — the receipt is still a warehouse
+document (quantities, damage, discrepancies) and it still drives pick-list
+regeneration, which is warehouse work.
 """
 from __future__ import annotations
 
@@ -49,12 +58,22 @@ router = APIRouter(tags=["warehouse"])
 
 
 # --- Inbound receipts --------------------------------------------------------
+#
+# Ownership moved from warehouse to finance on 2026-09-19, by decision: posting
+# a receipt is what creates stock and what the wholesaler's invoice is checked
+# against, and finance owns that reconciliation. The warehouse keeps READ access
+# so nobody is blind to what actually arrived, but cannot create a receipt.
+#
+# `POST` is finance-only, and `GET /awaiting` exists because the page used to
+# build its PO picker from `GET /purchase-orders` — an ops/finance route — so for
+# the role that was supposed to receive goods the picker was a silent 403 and
+# permanently empty.
 
 @inbound_router.post("", response_model=None, status_code=status.HTTP_201_CREATED)
 def create_inbound_receipt_endpoint(
     payload: InboundReceiptCreate,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_roles("warehouse")),
+    actor: User = Depends(require_roles("finance")),
 ):
     po = db.get(PurchaseOrder, payload.po_id)
     if po is None:
@@ -86,12 +105,47 @@ def list_inbound_receipts_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles("warehouse")),
+    _: User = Depends(require_roles("finance", "ops", "warehouse")),
 ):
     page, page_size = clamp_page(page, page_size)
     items, total = inbound_svc.list_receipts(db, po_id=po_id)
     start = (page - 1) * page_size
-    return page_response(items[start : start + page_size], total, page, page_size)
+    return page_response(items[start:start + page_size], total, page, page_size)
+
+
+@inbound_router.get("/awaiting", response_model=None)
+def list_awaiting_receipts_endpoint(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("finance", "ops", "warehouse")),
+):
+    """Purchase orders owed and not yet received — the work, not the history.
+
+    This is what the Inbound nav badge counts, and the page renders it as its
+    first table, so the number and the screen can never disagree again. Declared
+    **before** `/{receipt_id}`: a path-parameter route declared first would parse
+    "awaiting" as a receipt id and answer 404.
+
+    Not role-gated beyond authentication because it carries no cost prices — see
+    the service docstring.
+    """
+    page, page_size = clamp_page(page, page_size)
+    items, total = inbound_svc.list_awaiting_receipts(db)
+    start = (page - 1) * page_size
+    return page_response(items[start:start + page_size], total, page, page_size)
+
+
+@inbound_router.get("/{receipt_id}", response_model=None)
+def get_inbound_receipt_endpoint(
+    receipt_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("finance", "ops", "warehouse")),
+):
+    receipt = inbound_svc.get_receipt(db, receipt_id)
+    if receipt is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Receipt not found")
+    return receipt
 
 
 # --- PO received summary -----------------------------------------------------

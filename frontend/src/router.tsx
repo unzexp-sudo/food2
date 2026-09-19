@@ -13,7 +13,7 @@ const OrderDetailPage = lazy(() => import("./pages/orders/OrderDetailPage"));
 const ConsolidationPage = lazy(() => import("./pages/consolidation/ConsolidationPage"));
 const PurchaseOrdersPage = lazy(() => import("./pages/purchase-orders/PurchaseOrdersPage"));
 const PurchaseOrderDetailPage = lazy(() => import("./pages/purchase-orders/PurchaseOrderDetailPage"));
-const InboundPage = lazy(() => import("./pages/warehouse/InboundPage"));
+const InboundPage = lazy(() => import("./pages/finance/InboundPage"));
 const PickListsPage = lazy(() => import("./pages/warehouse/PickListsPage"));
 const InventoryPage = lazy(() => import("./pages/warehouse/InventoryPage"));
 const DeliveryPage = lazy(() => import("./pages/delivery/DeliveryPage"));
@@ -71,6 +71,12 @@ export function AppRoutes() {
             <Route path="/warehouse/pick-lists" element={<PickListsPage />} />
             <Route path="/warehouse/inventory" element={<InventoryPage />} />
             <Route path="/delivery" element={<DeliveryPage />} />
+            {/* Inbound moved to Finance on 2026-09-19: posting a receipt is what
+                creates stock and what the wholesaler's invoice is reconciled
+                against. `/warehouse/inbound` is kept as a redirect so a bookmark
+                or an old link does not dead-end on the wildcard. */}
+            <Route path="/warehouse/inbound" element={<Navigate to="/finance/inbound" replace />} />
+            <Route path="/finance/inbound" element={<InboundPage />} />
             <Route path="/finance/invoices" element={<InvoicesPage />} />
             <Route path="/finance/statements" element={<StatementsPage />} />
             <Route path="/finance/margin" element={<MarginPage />} />

@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from tests.conftest import client, admin_headers, warehouse_headers, ops_headers
+from tests.conftest import _auth_headers
 
 
 DELIVERY_DATE = date(2026, 9, 8)
@@ -116,8 +117,15 @@ def _build_chain_to_picked(client, warehouse_headers, *, planned_qty=50.0, pick_
         pol_id = pol.id
 
     # Receive fully.
+    #
+    # Posted as finance: inbound receipts moved to finance on 2026-09-19, and
+    # `POST /inbound-receipts` is now finance-only. This helper builds a chain,
+    # it is not testing who may receive — that is asserted in
+    # `test_warehouse.py::test_inbound_receipt_requires_finance_role` and
+    # `test_work_queue.py`. Authenticating inline keeps the ~15 callers of this
+    # helper unchanged.
     client.post(
-        "/api/v1/inbound-receipts", headers=warehouse_headers,
+        "/api/v1/inbound-receipts", headers=_auth_headers("finance@erp.local"),
         json={"po_id": po_id, "lines": [
             {"po_line_id": pol_id, "quantity_received": planned_qty},
         ]},

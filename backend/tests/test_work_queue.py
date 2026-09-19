@@ -30,7 +30,7 @@ import pytest
 
 from app.services.workqueue import ROLE_SECTIONS
 from tests.conftest import _auth_headers
-from tests.conftest import client, admin_headers, warehouse_headers  # noqa: F401
+from tests.conftest import client, admin_headers, warehouse_headers, finance_headers  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +116,9 @@ _ROLE_EXPECTATIONS = {
     "ops@erp.local": {
         "intake", "orders", "consolidation", "purchase_orders", "identity_chats",
     },
-    "warehouse@erp.local": {"inbound", "pick_lists", "delivery"},
-    "finance@erp.local": {"orders", "invoices"},
+    "warehouse@erp.local": {"pick_lists", "delivery"},
+    # `inbound` moved here from warehouse on 2026-09-19 with the page itself.
+    "finance@erp.local": {"inbound", "orders", "invoices"},
     "driver@erp.local": {"delivery"},
 }
 
@@ -146,7 +147,22 @@ def test_a_section_is_omitted_rather_than_reported_as_zero(client, warehouse_hea
     assert "intake" not in got
     assert "orders" not in got
     assert "invoices" not in got
+    # Inbound left the warehouse on 2026-09-19: the section moved to finance, and
+    # a badge for a page this role cannot open is a number it can never clear.
+    assert "inbound" not in got
     assert "pick_lists" in got
+
+
+def test_the_inbound_badge_is_a_finance_number_now(client, finance_headers):
+    """The one section that changed owner, pinned explicitly.
+
+    Not redundant with the parametrised test above: that one would still pass if
+    someone moved the section to *any* other role, and this asserts where it
+    actually belongs and that the warehouse lost it.
+    """
+    fin = _queue(client, finance_headers)
+    assert "inbound" in fin
+    assert "inbound" not in _queue(client, _auth_headers("warehouse@erp.local"))
 
 
 def test_every_authenticated_role_may_read_its_own_queue(client):
@@ -166,6 +182,128 @@ def test_the_queue_requires_a_token(client):
 
 
 # ---------------------------------------------------------------------------
+# A badge must be countable from the page it points at
+# ---------------------------------------------------------------------------
+
+# Sections whose badge is the number of rows on a page, with the request that
+# page makes. The badge and this request must return the same number — a badge
+# that disagrees with its own page is worse than no badge, because it is
+# indistinguishable from a broken one.
+#
+# This is the defect that was reported: the Inbound badge counted purchase
+# orders owed a receipt while its page rendered *receipts*, so the badge read 2
+# and the table was empty.
+#
+# Verified against production on 2026-09-19 before being written down here:
+# intake 13/13, orders 2/2, identity 0/0, purchase_orders 2/2, pick_lists 9/9.
+_BADGE_LIST_SOURCES: dict[str, str] = {
+    "intake": "/api/v1/intake/documents?status=needs_review&page_size=100",
+    "orders": "/api/v1/orders?statuses=draft,pending_confirmation,needs_clarification&page_size=100",
+    "identity_chats": "/api/v1/identity/unbound",
+    "purchase_orders": "/api/v1/purchase-orders?status=draft&page_size=100",
+    "inbound": "/api/v1/inbound-receipts/awaiting?page_size=100",
+}
+
+# The rest, and why no list can be compared to them. Each one is a deliberate
+# answer, not an omission — the point is that every badge has been thought
+# about, so a new section cannot be added without deciding.
+_BADGE_NOT_A_LIST: dict[str, str] = {
+    # A date you run consolidation for, not a set of rows.
+    "consolidation": "the action is 'run consolidation for a date'; the batch list is keyed differently",
+    # Cleared from the Delivery board, which lists every delivery — the badge is
+    # the not-yet-finished subset, and `/deliveries` has no multi-status filter.
+    "delivery": "the badge is the not-delivered subset; /deliveries filters one status at a time",
+    # Normally zero; cleared by generating an invoice, which is on the Invoices
+    # page but keyed by order, not by "has no invoice".
+    "invoices": "no filter expresses 'fulfilled with no invoice'",
+    # `task-count` is not a `{items,total}` page response; its `open_lines` is
+    # asserted directly in test_pick_lists_... below.
+    "pick_lists": "the page's count endpoint is task-count, asserted separately",
+}
+
+
+def test_every_badged_section_has_a_decided_source():
+    """No badge without a decision about how its page shows the same rows.
+
+    Adding a section to `ROLE_SECTIONS` without saying which of these two lists
+    it belongs to fails here, rather than shipping a number nobody can check.
+    """
+    assert set(_BADGE_LIST_SOURCES) | set(_BADGE_NOT_A_LIST) == set(ROLE_SECTIONS)
+    assert not (set(_BADGE_LIST_SOURCES) & set(_BADGE_NOT_A_LIST))
+
+
+@pytest.mark.parametrize("section", sorted(_BADGE_LIST_SOURCES))
+def test_the_badge_count_matches_the_rows_the_page_can_show(client, admin_headers, section):
+    """The number on the nav item is the number of rows behind it."""
+    badge = _queue(client, admin_headers)[section]
+    r = client.get(_BADGE_LIST_SOURCES[section], headers=admin_headers)
+    assert r.status_code == 200, r.text
+    listed = r.json()
+    assert badge == listed["total"], (
+        f"the {section} badge says {badge} but its page can show "
+        f"{listed['total']} row(s) — one of them changed predicate without the other"
+    )
+
+
+def test_the_pick_list_badge_is_the_open_lines_the_page_can_pick(client, warehouse_headers):
+    """`task-count.open_lines` is the badge, and it is the rows with a Pick button."""
+    badge = _queue(client, warehouse_headers)["pick_lists"]
+    body = client.get("/api/v1/pick-lists/task-count", headers=warehouse_headers).json()
+    assert badge == body["open_lines"]
+
+
+def test_a_partly_received_po_is_still_owed_and_still_counted(client, finance_headers):
+    """The status a naive filter drops, and the reason this test exists.
+
+    `RECEIVABLE_PO_STATUSES` is `{sent, partially_received}`. A list filtered on
+    `sent` alone — the shape this nearly shipped with — hides every PO awaiting
+    a second delivery while the badge keeps counting it. That is the same class
+    of defect as the one reported, one filter clause smaller.
+
+    Written after a probe: narrowing the list to `sent` left **all five**
+    `test_the_badge_count_matches_the_rows_the_page_can_show` cases green,
+    because the shared test database happened to contain no partly-received PO.
+    A parity test over whatever state exists passes vacuously the moment the
+    interesting state is absent. So the state is created here rather than hoped
+    for.
+    """
+    from app.core.database import SessionLocal
+    from tests.test_warehouse import _seed_chain_for_inbound
+
+    # Ordered 60 of potato, 30 of cabbage; receive 50 → partly received.
+    data = _seed_chain_for_inbound(SessionLocal(), partial=True)
+    r = client.post(
+        "/api/v1/inbound-receipts",
+        headers=finance_headers,
+        json={"po_id": data["po"].id, "lines": [
+            {"po_line_id": data["pol1"].id, "quantity_received": 50.0},
+        ]},
+    )
+    assert r.status_code == 201, r.text
+
+    from app.models import PurchaseOrder
+    with SessionLocal() as db:
+        assert db.get(PurchaseOrder, data["po"].id).status == "partially_received"
+
+    listed = client.get(
+        "/api/v1/inbound-receipts/awaiting?page_size=100", headers=finance_headers
+    ).json()
+    row = next((x for x in listed["items"] if x["id"] == data["po"].id), None)
+    assert row is not None, "a partly-received PO still owes goods and must stay listed"
+    assert row["status"] == "partially_received"
+    # Both lines: 60 ordered - 50 received = 10 of potato, plus all 30 of
+    # cabbage, which has not arrived at all. Outstanding is per PO, not per
+    # line — the first draft of this assertion said 10.0 and was wrong.
+    assert row["quantity_outstanding"] == 40.0
+    assert row["total_received"] == 50.0
+
+    badge = _queue(client, finance_headers)["inbound"]
+    assert badge == listed["total"], (
+        "the badge counts partly-received POs, so the list must show them too"
+    )
+
+
+# ---------------------------------------------------------------------------
 # The counts move when the work moves
 # ---------------------------------------------------------------------------
 
@@ -178,20 +316,23 @@ def _seed_consolidated_order():
 
 
 def test_an_open_pick_line_is_counted_and_picking_it_clears_the_badge(
-    client, warehouse_headers
+    client, warehouse_headers, finance_headers
 ):
     """The warehouse badge the user could not see.
 
     Note what the count tracks: the *pick lines*, not the order. The order sits
     at `consolidated` for the whole test — the badge has to fall to zero when
     the picking is done, not when the order changes status.
+
+    The receipt is posted as finance: inbound receipts moved to finance on
+    2026-09-19, and the warehouse is now 403 on `POST /inbound-receipts`.
     """
     data = _seed_consolidated_order()
     before = _queue(client, warehouse_headers)["pick_lists"]
 
     r = client.post(
         "/api/v1/inbound-receipts",
-        headers=warehouse_headers,
+        headers=finance_headers,
         json={"po_id": data["po"].id, "lines": [
             {"po_line_id": data["pol1"].id, "quantity_received": 50.0},
             {"po_line_id": data["pol2"].id, "quantity_received": 30.0},

@@ -76,7 +76,6 @@ const MENU_GROUPS: MenuGroupDef[] = [
     key: "warehouse",
     labelKey: "nav.groups.warehouse",
     items: [
-      { key: "/warehouse/inbound", labelKey: "nav.inbound", icon: <DownloadOutlined />, roles: ["admin", "warehouse"] },
       { key: "/warehouse/pick-lists", labelKey: "nav.pickLists", icon: <OrderedListOutlined />, roles: ["admin", "warehouse"] },
       { key: "/warehouse/inventory", labelKey: "nav.inventory", icon: <DatabaseOutlined />, roles: ["admin", "warehouse"] },
     ],
@@ -92,6 +91,12 @@ const MENU_GROUPS: MenuGroupDef[] = [
     key: "finance",
     labelKey: "nav.groups.finance",
     items: [
+      // Inbound receipts live here, not under Warehouse (moved 2026-09-19).
+      // Posting a receipt is what creates stock and what the wholesaler's
+      // invoice is reconciled against — finance's gate. The badge moved with
+      // it, and `workqueue.ROLE_SECTIONS` must agree: `tests/test_work_queue.py`
+      // parses this file and fails if the two lists drift.
+      { key: "/finance/inbound", labelKey: "nav.inbound", icon: <DownloadOutlined />, roles: ["admin", "finance"] },
       { key: "/finance/invoices", labelKey: "nav.invoices", icon: <FileProtectOutlined />, roles: ["admin", "finance"] },
       { key: "/finance/statements", labelKey: "nav.statements", icon: <AccountBookOutlined />, roles: ["admin", "finance"] },
       { key: "/finance/margin", labelKey: "nav.margin", icon: <RiseOutlined />, roles: ["admin", "finance"] },
@@ -186,7 +191,7 @@ const WORK_BADGES: {
     toastKey: "nav.newWork.purchaseOrders",
   },
   {
-    nav: "/warehouse/inbound",
+    nav: "/finance/inbound",
     queue: "inbound",
     titleKey: "nav.newWork.inboundTitle",
     toastKey: "nav.newWork.inbound",

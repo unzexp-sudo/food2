@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from tests.conftest import client, admin_headers, warehouse_headers, ops_headers
+from tests.conftest import client, admin_headers, warehouse_headers, ops_headers, finance_headers
 
 
 DELIVERY_DATE = date(2026, 9, 8)
@@ -158,11 +158,121 @@ def _seed_chain_for_inbound(db, *, partial: bool = False, delivery_date: date | 
 # ---------------------------------------------------------------------------
 
 def test_list_inbound_receipts_empty(client, warehouse_headers):
+    # Read access stays with the warehouse even though POST moved to finance:
+    # the people who unload the truck should not be blind to what was booked in.
     r = client.get("/api/v1/inbound-receipts", headers=warehouse_headers)
     assert r.status_code == 200
     body = r.json()
     assert body["total"] >= 0
     assert isinstance(body["items"], list)
+
+
+def test_inbound_receipt_requires_finance_role(client, warehouse_headers, ops_headers):
+    """Posting a receipt is finance's gate — moved there 2026-09-19.
+
+    The receipt is what creates stock and what the wholesaler's invoice is
+    reconciled against. The warehouse keeps READ access (`test_list_inbound_
+    receipts_empty` above) but must not be able to book goods in.
+    """
+    for headers in (warehouse_headers, ops_headers):
+        r = client.post(
+            "/api/v1/inbound-receipts",
+            headers=headers,
+            json={"po_id": "any", "lines": [{"po_line_id": "any", "quantity_received": 1}]},
+        )
+        assert r.status_code == 403, r.text
+
+
+def test_awaiting_receipts_lists_what_the_badge_counts(client, admin_headers, finance_headers):
+    """The badge and the page must read the same predicate.
+
+    This is the defect that produced the report: the Inbound nav badge counted
+    purchase orders owed a receipt while the page rendered *receipts*, so the
+    badge read 2 and the table was empty. Asserted as an equality rather than
+    two independent expectations, because the failure mode is the two drifting
+    apart.
+    """
+    from app.core.database import SessionLocal
+    data = _seed_chain_for_inbound(SessionLocal())
+
+    r = client.get("/api/v1/inbound-receipts/awaiting?page_size=100", headers=finance_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    listed = {row["id"] for row in body["items"]}
+    assert data["po"].id in listed, "a PO in `sent` is owed a receipt and must be listed"
+
+    badge = client.get("/api/v1/work-queue", headers=finance_headers).json()["inbound"]
+    assert badge == body["total"], (
+        "the Inbound badge and the Awaiting-receipt table disagree — one of them "
+        "changed its predicate without the other"
+    )
+
+    row = next(x for x in body["items"] if x["id"] == data["po"].id)
+    assert row["status"] == "sent"
+    assert row["delivery_date"] == data["delivery_date"].isoformat()
+    assert row["total_ordered"] == 80.0
+    assert row["total_received"] == 0.0
+    assert row["quantity_outstanding"] == 80.0
+    assert row["line_count"] == 2
+    # No cost prices: whoever checks the delivery note does not need them.
+    assert "total_amount" not in row and "cost_price" not in row
+
+
+def test_receiving_a_po_removes_it_from_awaiting_and_clears_the_badge(
+    client, finance_headers, admin_headers
+):
+    """The queue is a queue: doing the work takes the row out of it."""
+    from app.core.database import SessionLocal
+    data = _seed_chain_for_inbound(SessionLocal())
+
+    before = client.get("/api/v1/inbound-receipts/awaiting?page_size=100", headers=finance_headers).json()
+    assert data["po"].id in {x["id"] for x in before["items"]}
+
+    r = client.post(
+        "/api/v1/inbound-receipts",
+        headers=finance_headers,
+        json={"po_id": data["po"].id, "lines": [
+            {"po_line_id": data["pol1"].id, "quantity_received": 50.0},
+            {"po_line_id": data["pol2"].id, "quantity_received": 30.0},
+        ]},
+    )
+    assert r.status_code == 201, r.text
+
+    after = client.get("/api/v1/inbound-receipts/awaiting?page_size=100", headers=finance_headers).json()
+    assert data["po"].id not in {x["id"] for x in after["items"]}
+    assert after["total"] == before["total"] - 1
+    badge = client.get("/api/v1/work-queue", headers=finance_headers).json()["inbound"]
+    assert badge == after["total"]
+
+
+def test_receipt_detail_route_exists(client, finance_headers):
+    """`GET /inbound-receipts/{id}` did not exist.
+
+    The page's View-lines button called it for every receipt, got a 404, and
+    rendered "No lines." — an error dressed as an empty result, which is why
+    nobody reported it.
+    """
+    from app.core.database import SessionLocal
+    data = _seed_chain_for_inbound(SessionLocal())
+    created = client.post(
+        "/api/v1/inbound-receipts",
+        headers=finance_headers,
+        json={"po_id": data["po"].id, "lines": [
+            {"po_line_id": data["pol1"].id, "quantity_received": 50.0},
+            {"po_line_id": data["pol2"].id, "quantity_received": 30.0},
+        ]},
+    )
+    assert created.status_code == 201, created.text
+    receipt_id = created.json()["id"]
+
+    r = client.get(f"/api/v1/inbound-receipts/{receipt_id}", headers=finance_headers)
+    assert r.status_code == 200, r.text
+    detail = r.json()
+    assert detail["receipt_number"].startswith("RCP-")
+    assert len(detail["lines"]) == 2
+    assert {ln["quantity_received"] for ln in detail["lines"]} == {50.0, 30.0}
+
+    assert client.get("/api/v1/inbound-receipts/nope", headers=finance_headers).status_code == 404
 
 
 def test_po_received_summary_before_any_receipt(client, admin_headers):
@@ -180,7 +290,7 @@ def test_po_received_summary_before_any_receipt(client, admin_headers):
     assert len(body["receipts"]) == 0
 
 
-def test_inbound_receipt_full_marks_po_received(client, warehouse_headers, admin_headers):
+def test_inbound_receipt_full_marks_po_received(client, warehouse_headers, finance_headers, admin_headers):
     from app.core.database import SessionLocal
     data = _seed_chain_for_inbound(SessionLocal())
     po_id = data["po"].id
@@ -189,7 +299,7 @@ def test_inbound_receipt_full_marks_po_received(client, warehouse_headers, admin
     # Fully receive both lines (60 potato, 30 cabbage).
     r = client.post(
         "/api/v1/inbound-receipts",
-        headers=warehouse_headers,
+        headers=finance_headers,
         json={
             "po_id": po_id,
             "lines": [
@@ -213,7 +323,7 @@ def test_inbound_receipt_full_marks_po_received(client, warehouse_headers, admin
     assert all(ln["discrepancy"] is False for ln in summary["lines"])
 
 
-def test_inbound_receipt_discrepancy_marks_partially_received(client, warehouse_headers, admin_headers):
+def test_inbound_receipt_discrepancy_marks_partially_received(client, warehouse_headers, finance_headers, admin_headers):
     from app.core.database import SessionLocal
     data = _seed_chain_for_inbound(SessionLocal(), partial=True)
     po_id = data["po"].id
@@ -222,7 +332,7 @@ def test_inbound_receipt_discrepancy_marks_partially_received(client, warehouse_
     # Receive 50 of potato (short of 60) and 30 of cabbage (full).
     r = client.post(
         "/api/v1/inbound-receipts",
-        headers=warehouse_headers,
+        headers=finance_headers,
         json={
             "po_id": po_id,
             "lines": [
@@ -244,7 +354,7 @@ def test_inbound_receipt_discrepancy_marks_partially_received(client, warehouse_
     assert potato_line["quantity_received"] == 50.0
 
 
-def test_inbound_receipt_409_when_po_not_receivable(client, warehouse_headers):
+def test_inbound_receipt_409_when_po_not_receivable(client, warehouse_headers, finance_headers):
     from app.core.database import SessionLocal
     from app.models import PurchaseOrder
     data = _seed_chain_for_inbound(SessionLocal())
@@ -256,7 +366,7 @@ def test_inbound_receipt_409_when_po_not_receivable(client, warehouse_headers):
         db.commit()
     r = client.post(
         "/api/v1/inbound-receipts",
-        headers=warehouse_headers,
+        headers=finance_headers,
         json={"po_id": po.id, "lines": [
             {"po_line_id": data["pol1"].id, "quantity_received": 1},
         ]},
@@ -264,7 +374,7 @@ def test_inbound_receipt_409_when_po_not_receivable(client, warehouse_headers):
     assert r.status_code == 409
 
 
-def test_pick_list_generation_and_pick_full(client, warehouse_headers, admin_headers):
+def test_pick_list_generation_and_pick_full(client, warehouse_headers, finance_headers, admin_headers):
     from app.core.database import SessionLocal
     data = _seed_chain_for_inbound(SessionLocal())
     po_id = data["po"].id
@@ -273,7 +383,7 @@ def test_pick_list_generation_and_pick_full(client, warehouse_headers, admin_hea
     # Receive full stock first so allocation is 100%.
     client.post(
         "/api/v1/inbound-receipts",
-        headers=warehouse_headers,
+        headers=finance_headers,
         json={"po_id": po_id, "lines": [
             {"po_line_id": pol1_id, "quantity_received": 50.0},
             {"po_line_id": pol2_id, "quantity_received": 30.0},
@@ -326,7 +436,7 @@ def test_pick_list_generation_and_pick_full(client, warehouse_headers, admin_hea
         assert order.status == "consolidated"
 
 
-def test_pick_list_short_line_marks_short(client, warehouse_headers):
+def test_pick_list_short_line_marks_short(client, warehouse_headers, finance_headers):
     from app.core.database import SessionLocal
     data = _seed_chain_for_inbound(SessionLocal())
     po_id = data["po"].id
@@ -335,7 +445,7 @@ def test_pick_list_short_line_marks_short(client, warehouse_headers):
     # Receive full.
     client.post(
         "/api/v1/inbound-receipts",
-        headers=warehouse_headers,
+        headers=finance_headers,
         json={"po_id": po_id, "lines": [
             {"po_line_id": pol1_id, "quantity_received": 50.0},
             {"po_line_id": pol2_id, "quantity_received": 30.0},
@@ -362,7 +472,7 @@ def test_pick_list_short_line_marks_short(client, warehouse_headers):
     assert body["status"] == "picking"
 
 
-def test_pick_list_proportional_allocation_when_received_short(client, warehouse_headers):
+def test_pick_list_proportional_allocation_when_received_short(client, warehouse_headers, finance_headers):
     """When total received < total ordered for a product, planned qty is
     allocated proportionally by order line quantity.
     """
@@ -432,7 +542,7 @@ def test_pick_list_proportional_allocation_when_received_short(client, warehouse
     # Receive only 40 of 80 → ratio 0.5.
     client.post(
         "/api/v1/inbound-receipts",
-        headers=warehouse_headers,
+        headers=finance_headers,
         json={"po_id": po_id, "lines": [
             {"po_line_id": pol_id, "quantity_received": 40.0},
         ]},
@@ -511,10 +621,10 @@ def test_pick_list_not_found(client, warehouse_headers):
     assert r.status_code == 404
 
 
-def test_inbound_receipt_po_not_found(client, warehouse_headers):
+def test_inbound_receipt_po_not_found(client, warehouse_headers, finance_headers):
     r = client.post(
         "/api/v1/inbound-receipts",
-        headers=warehouse_headers,
+        headers=finance_headers,
         json={"po_id": "nope", "lines": [
             {"po_line_id": "x", "quantity_received": 1},
         ]},
@@ -522,7 +632,7 @@ def test_inbound_receipt_po_not_found(client, warehouse_headers):
     assert r.status_code == 404
 
 
-def test_pick_list_get_embeds_order_and_customer(client, warehouse_headers):
+def test_pick_list_get_embeds_order_and_customer(client, warehouse_headers, finance_headers):
     from app.core.database import SessionLocal
     data = _seed_chain_for_inbound(SessionLocal())
     po_id = data["po"].id
@@ -530,7 +640,7 @@ def test_pick_list_get_embeds_order_and_customer(client, warehouse_headers):
     dd = data["delivery_date"]
     client.post(
         "/api/v1/inbound-receipts",
-        headers=warehouse_headers,
+        headers=finance_headers,
         json={"po_id": po_id, "lines": [
             {"po_line_id": pol1_id, "quantity_received": 50.0},
             {"po_line_id": pol2_id, "quantity_received": 30.0},

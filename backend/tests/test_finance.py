@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from tests.conftest import admin_headers, client, finance_headers, warehouse_headers
+from tests.conftest import _auth_headers
 
 # Unique delivery dates per test (shared session-scoped DB).
 _date_counter = {"n": 200}
@@ -109,9 +110,11 @@ def _build_chain_to_picked(client, warehouse_headers, *, planned_qty=50.0, pick_
         wholesaler_id = wholesaler.id
         customer_id = customer.id
 
-    # Receive fully via the warehouse API.
+    # Receive fully via the inbound API — finance's gate since 2026-09-19.
+    # Authenticated inline rather than through a fixture so the ~14 callers of
+    # this chain helper do not all have to grow a parameter.
     r = client.post(
-        "/api/v1/inbound-receipts", headers=warehouse_headers,
+        "/api/v1/inbound-receipts", headers=_auth_headers("finance@erp.local"),
         json={"po_id": po_id, "lines": [
             {"po_line_id": pol_id, "quantity_received": planned_qty},
         ]},
