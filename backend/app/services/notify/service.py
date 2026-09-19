@@ -70,6 +70,23 @@ def _customer_locale(db: Session, customer_id: str | None) -> str:
     return _DEFAULT_LOCALE
 
 
+def _summary_for(template: str, result: dict) -> str:
+    """The one-line audit summary. Truncated, because the column is 500 chars.
+
+    A WeCom refusal arrives with a hint id, the source IP and a documentation
+    URL bolted on the end, so the raw string can be long. `AuditLog.summary` is
+    `String(500)`, so an unclipped reason would fail the audit write — and this
+    module swallows write failures by design, so the row would just vanish.
+    The full text is still kept in `after["detail"]`.
+    """
+    status = str(result.get("status") or "unknown")
+    detail = result.get("error") or result.get("reason")
+    text = f"{template} -> {status}"
+    if detail:
+        text += ": " + str(detail)[:400]
+    return text[:500]
+
+
 def _record(
     *,
     template: str,
@@ -111,7 +128,7 @@ def _record(
                     "chat_id": chat_id,
                     "detail": detail,
                 },
-                summary=f"{template} -> {status}" + (f": {detail}" if detail else ""),
+                summary=_summary_for(template, result),
             )
             audit_db.commit()
     except Exception:  # noqa: BLE001 — a broken audit write must not break an order
@@ -208,7 +225,16 @@ def _send(
             )
             return {"status": "failed", "error": f"HTTP {resp.status_code}: {data}"}
 
-        return {"status": str(data.get("status") or "sent"), "response": data}
+        out = {"status": str(data.get("status") or "sent"), "response": data}
+        # A WeCom-level refusal arrives as HTTP 200 with the failure inside the
+        # body — `{"status": "failed", "error": "appchat/send failed: 60020
+        # ..."}`. Left nested, `notify()` reports the status and drops the
+        # reason, so the audit row says "failed" with no detail and the one
+        # fact that explains why the customer was not told is gone. Lift it.
+        reason = data.get("error") or data.get("reason")
+        if reason:
+            out["error"] = reason
+        return out
     except Exception as exc:  # noqa: BLE001 — a dead gateway must never break the ERP
         logger.warning("notify(%s) failed: %s", template, exc)
         return {"status": "failed", "error": str(exc)}
