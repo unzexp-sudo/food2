@@ -2,6 +2,7 @@
 
 Endpoints (see docs/AGENT_CONTRACTS.md §5):
   GET/POST /customers, GET/PATCH/DELETE /customers/{id}
+  POST /customers/import — batch load from CSV/XLSX (dry_run=True validates only)
   GET /customers/{id}/contacts, POST /customers/{id}/contacts, DELETE /customers/contacts/{contact_id}
   GET /customers/{id}/aliases, POST /customers/{id}/aliases, DELETE /customers/aliases/{alias_id}
 """
@@ -9,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -26,6 +27,7 @@ from app.schemas.customers import (
     CustomerUpdate,
 )
 from app.schemas.identity import AddressVerify
+from app.services.masterdata import import_engine
 from app.services.masterdata.customers import (
     create_contact,
     create_customer,
@@ -116,6 +118,49 @@ def create_customer_endpoint(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     db.commit()
     return _customer_out(customer)
+
+
+# --- Batch import -------------------------------------------------------------
+@router.post("/import", response_model=None)
+async def import_customers_endpoint(
+    file: UploadFile = File(...),
+    mapping: str | None = Form(default=None),
+    options: str | None = Form(default=None),
+    dry_run: bool = Form(default=True),
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles("ops", "admin")),
+):
+    """Batch-load customers from a CSV/XLSX export, whatever its shape.
+
+    Two calls, one file. `dry_run=true` (the default) validates every row and
+    returns a verdict per row — create / update / error — writing nothing at
+    all. Submit the same file with `dry_run=false` to apply it.
+
+    The default is the safe direction deliberately: a caller that forgets the
+    flag previews rather than imports. The preview also returns a
+    `content_sha256`; send it back as `options.sha256` to have the commit refuse
+    a file that changed between the two calls, so the thing that was reviewed is
+    the thing that gets written.
+
+    `mapping` is a JSON object of `{file column: our field}`, echoed from the
+    previous response after the operator confirmed it. Omit it on the first call
+    and the importer proposes one from a bilingual synonym dictionary; unmapped
+    columns are returned so nothing is dropped in silence.
+    """
+    content = await file.read()
+    try:
+        return import_engine.run_import_request(
+            db,
+            kind="customers",
+            filename=file.filename or "",
+            content=content,
+            mapping_raw=mapping,
+            options_raw=options,
+            dry_run=dry_run,
+            actor=actor,
+        )
+    except import_engine.ImportError_ as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
 
 # --- Single customer CRUD -----------------------------------------------------

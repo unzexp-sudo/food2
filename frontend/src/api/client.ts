@@ -47,6 +47,17 @@ export const api = {
   post<T>(url: string, data?: unknown): Promise<T> {
     return client.post<T>(url, data).then((res) => res.data);
   },
+  /**
+   * POST a multipart form (file uploads).
+   *
+   * Deliberately does not set `Content-Type`: the browser has to generate the
+   * multipart boundary, and setting the header by hand drops it — the request
+   * then arrives with a body FastAPI cannot parse and the endpoint reports the
+   * file as missing. axios sets the header correctly when handed a FormData.
+   */
+  postForm<T>(url: string, form: FormData): Promise<T> {
+    return client.post<T>(url, form).then((res) => res.data);
+  },
   patch<T>(url: string, data?: unknown): Promise<T> {
     return client.patch<T>(url, data).then((res) => res.data);
   },

@@ -201,6 +201,65 @@ GET/POST /standing-order-templates, GET/PATCH/DELETE /standing-order-templates/{
 POST /standing-order-templates/{id}/create-order   → creates a draft order (no AI)
 ```
 
+### Batch import (master data agent) — CSV/XLSX, three entities
+```
+POST /customers/import         R: ops/admin
+POST /products/import          R: ops/admin
+POST /contract-prices/import   R: ops/admin
+  multipart/form-data:
+    file      CSV or XLSX. A legacy .xls is refused with instructions to re-save.
+    mapping   JSON {file column: our field}, optional. Omit to accept the proposal.
+    options   JSON {sha256: "<hash from the preview>"}, optional on the preview.
+    dry_run   "true" (default) validates and writes nothing; "false" applies.
+  → 200 ImportReport (below). 400 for a file-level problem (unparseable, empty,
+    unsupported extension, a mapping naming an unknown field, or a commit whose
+    sha256 no longer matches the reviewed file).
+
+ImportReport:
+  kind, shape ("long" | "matrix"), headers[], mapping{column: field|null},
+  unmapped_headers[], rows[RowResult], counts{create, update, error}, ok,
+  applied, content_sha256, encoding, sheet_name, header_row_number, notes[],
+  spec{label, key_fields[], fields[{name, required, kind, help}]}
+RowResult:
+  row_number (1-based, as in the file), action ("create"|"update"|"error"),
+  key, values{}, errors[], warnings[], creates[]
+```
+
+**Two calls, one file.** The preview and the commit are the same request with a
+different `dry_run`. The commit must carry the preview's `content_sha256`; the
+server refuses a file that changed in between, so the bytes that were reviewed
+are the bytes that get written.
+
+**All-or-nothing.** If any row is an error, nothing is written and `applied` is
+false. `counts.error > 0` gates the write, so a row that *will* be skipped must
+be reported as an error at preview time — a row shown as "update" that the
+commit then skips is a preview that lies about what the commit will do.
+
+**What the importer will and will not create.** Missing categories and units are
+created on demand. A price file never creates the customer or the product it
+prices: a typo'd code must not become a real trading partner, and a customer
+cannot be built from a code alone (`name_en`/`name_zh` are NOT NULL). Such a row
+is an error.
+
+**`name_en`/`name_zh` are both NOT NULL**, so a single-language file has the
+present name copied into the missing field, with a warning on every affected
+row. An unflagged copy is indistinguishable from real data.
+
+**Wide price matrices.** When `customer` maps but `product` does not, the
+unmapped columns *are* the products: each non-empty cell becomes one price row.
+A heading like `土豆(斤)` sets the unit only when `斤` is a unit we know;
+otherwise the parentheses are part of the product's real name. An empty cell
+means "no price agreed", not zero. In this shape `product` and `price` are
+supplied by the file's structure, so they are not required as mapped columns.
+
+**Supersede, never overwrite.** A re-imported price closes the open
+`(customer, product, unit)` row (`valid_until = valid_from`) and inserts a new
+one, so an invoice that locked the old price stays explainable.
+
+**Scale.** 1000 rows: preview 0.12s, commit 0.54s. Every row writes through the
+existing master-data services, so `log_audit` records before/after per row with
+no new table; one `ImportBatch` audit row summarises the run.
+
 ### intake (intake agent)
 ```
 POST /intake/submit                               R: ops/admin
@@ -367,6 +426,27 @@ Build it by walking: `order_line → consolidation_batch_lines → purchase_orde
 - Confidence: API 0–1 → display as percent, color: ≥0.95 green, ≥0.7 orange, else red.
 - Every page: AntD `Table` + filters in a card; detail pages/drawers for edit forms. Keep it clean and dense — this is an ops tool.
 - **Verify with `npm run build`** — it must pass with zero TypeScript errors before you finish. Do not run `npm install` for new packages; use what's installed (antd, @ant-design/icons, react-router-dom, axios, i18next, react-i18next, dayjs).
+
+### Batch import wizard
+
+`src/components/import/ImportWizard.tsx` — one component, three mounts
+(Customers, Products, Contracts), driven by props `endpoint`, `entityLabel`,
+`onImported`. It runs the two-call contract above: upload → confirm the column
+mapping → review every row → commit with the reviewed hash. It blocks the commit
+button whenever `counts.error > 0`, because the server would refuse it anyway
+and a disabled button with a reason beats a failed request. A 1000-row file
+cannot be read in a paginated table, so the report exports to CSV (with a BOM,
+or Excel shows the Chinese as mojibake).
+
+Two traps this component exists downstream of:
+
+- **Use `api.postForm` for multipart, never `api.post`.** Setting
+  `Content-Type: multipart/form-data` by hand drops the boundary the browser
+  generates; the request arrives unparseable and the endpoint reports the file
+  as missing. `postForm` deliberately sets no content-type.
+- **i18next interpolates `{{double braces}}`.** `{count}` renders literally, and
+  `tsc` cannot see it — `t` is an untyped `TFunction` and there is no
+  key-parity test. Check new keys in **both** `en.ts` and `zh.ts` by hand.
 
 ---
 

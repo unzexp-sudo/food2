@@ -2,12 +2,13 @@
 
 Two resources merged into one router (prefix /api/v1):
   GET/POST /contract-prices, DELETE /contract-prices/{id}
+  POST /contract-prices/import — batch load customer prices, long or matrix shape
   GET/POST /standing-order-templates, GET/PATCH/DELETE /standing-order-templates/{id}
   POST /standing-order-templates/{id}/create-order
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -23,6 +24,7 @@ from app.schemas.contracts import (
     TemplateOut,
     TemplateUpdate,
 )
+from app.services.masterdata import import_engine
 from app.services.masterdata.contracts import (
     create_contract_price,
     create_order_from_template,
@@ -85,6 +87,55 @@ def create_contract_price_endpoint(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     db.commit()
     return _price_out(price)
+
+
+@contract_prices_router.post("/import", response_model=None)
+async def import_contract_prices_endpoint(
+    file: UploadFile = File(...),
+    mapping: str | None = Form(default=None),
+    options: str | None = Form(default=None),
+    dry_run: bool = Form(default=True),
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles("ops", "admin")),
+):
+    """Batch-load customer-specific prices from a CSV/XLSX export.
+
+    Handles **both** shapes a price list comes in, because both are common and
+    only one of them looks like a table of prices:
+
+    - **Long** — one row per customer × product, with customer / product /
+      price columns.
+    - **Matrix** — customers down the rows, products across the columns. This is
+      the shape most Chinese F&B price sheets use. It is detected by the absence
+      of a product column: if `customer` is mapped and `product` is not, the
+      unmapped columns *are* the products and each non-empty cell becomes one
+      price.
+
+    Prices are per unit, and `contract_prices` is keyed by
+    (customer, product, unit). A price with no unit borrows the product's own
+    default unit; if that is unset too, the row is refused rather than stored
+    against an invented unit.
+
+    `valid_from` is required by the table. If the file has no date column the
+    import defaults to today (override with `options.valid_from`), and
+    re-importing a price **supersedes** the existing open row for the same
+    customer/product/unit rather than overwriting it — so the previous price
+    keeps its history and an order already confirmed keeps the price it locked.
+    """
+    content = await file.read()
+    try:
+        return import_engine.run_import_request(
+            db,
+            kind="prices",
+            filename=file.filename or "",
+            content=content,
+            mapping_raw=mapping,
+            options_raw=options,
+            dry_run=dry_run,
+            actor=actor,
+        )
+    except import_engine.ImportError_ as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
 
 @contract_prices_router.delete("/{price_id}", response_model=None, status_code=status.HTTP_204_NO_CONTENT)

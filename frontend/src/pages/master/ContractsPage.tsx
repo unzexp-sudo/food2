@@ -21,6 +21,7 @@ import { api, type Page } from "../../api/client";
 import { useList, useMutate } from "../../api/hooks";
 import { formatDate, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
+import ImportWizard from "../../components/import/ImportWizard";
 
 interface Customer {
   id: string;
@@ -269,6 +270,11 @@ function PricesTab() {
         <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>
           {t("pages.master.contracts.newPrice")}
         </Button>
+        <ImportWizard
+          endpoint="/contract-prices/import"
+          entityLabel={t("pages.master.contracts.tabPrices")}
+          onImported={list.refresh}
+        />
       </Space>
       <Table<ContractPrice>
         rowKey="id"

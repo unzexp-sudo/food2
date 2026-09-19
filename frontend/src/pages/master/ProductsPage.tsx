@@ -19,6 +19,7 @@ import { api, type Page } from "../../api/client";
 import { useList, useMutate } from "../../api/hooks";
 import { pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
+import ImportWizard from "../../components/import/ImportWizard";
 import ProductDetailDrawer from "./ProductDetailDrawer";
 import type { ProductDetail } from "./ProductDetailDrawer";
 
@@ -330,14 +331,16 @@ function ProductsTab() {
         onClose={() => setDetailOpen(false)}
       />
 
-      <Button
-        type="primary"
-        icon={<PlusOutlined />}
-        onClick={openNew}
-        style={{ marginTop: 12 }}
-      >
-        {t("pages.master.products.new")}
-      </Button>
+      <Space style={{ marginTop: 12 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>
+          {t("pages.master.products.new")}
+        </Button>
+        <ImportWizard
+          endpoint="/products/import"
+          entityLabel={t("nav.products")}
+          onImported={list.refresh}
+        />
+      </Space>
     </>
   );
 }

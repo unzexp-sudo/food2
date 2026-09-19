@@ -7,7 +7,7 @@ Three resources merged into one router (prefix /api/v1):
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -25,6 +25,7 @@ from app.schemas.catalog import (
     UnitOut,
     UnitUpdate,
 )
+from app.services.masterdata import import_engine
 from app.services.masterdata.catalog import (
     create_category,
     create_product,
@@ -116,6 +117,44 @@ def create_product_endpoint(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     db.commit()
     return _product_out(product)
+
+
+@products_router.post("/import", response_model=None)
+async def import_products_endpoint(
+    file: UploadFile = File(...),
+    mapping: str | None = Form(default=None),
+    options: str | None = Form(default=None),
+    dry_run: bool = Form(default=True),
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles("ops", "admin")),
+):
+    """Batch-load products from a CSV/XLSX export, whatever its shape.
+
+    `dry_run=true` (the default) validates and reports per row without writing;
+    resubmit the same file with `dry_run=false` to apply. Send back the preview's
+    `content_sha256` as `options.sha256` and the commit will refuse a file that
+    changed in between.
+
+    A category or unit named in the file is matched by name (or code) and
+    **created if missing**, so a first load of a few thousand products does not
+    require the taxonomy to exist first. Pass
+    `options.create_missing_refs=false` to refuse that and have those rows
+    warned instead.
+    """
+    content = await file.read()
+    try:
+        return import_engine.run_import_request(
+            db,
+            kind="products",
+            filename=file.filename or "",
+            content=content,
+            mapping_raw=mapping,
+            options_raw=options,
+            dry_run=dry_run,
+            actor=actor,
+        )
+    except import_engine.ImportError_ as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
 
 @products_router.get("/{product_id}", response_model=None)

@@ -19,6 +19,7 @@ import { api, getApiError, type Page } from "../../api/client";
 import { useList, useMutate } from "../../api/hooks";
 import { pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
+import ImportWizard from "../../components/import/ImportWizard";
 import CustomerDetailDrawer from "./CustomerDetailDrawer";
 
 interface Customer {
@@ -422,9 +423,16 @@ export default function CustomersPage() {
     <Card
       title={t("pages.master.customers.title")}
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>
-          {t("pages.master.customers.new")}
-        </Button>
+        <Space>
+          <ImportWizard
+            endpoint="/customers/import"
+            entityLabel={t("nav.customers")}
+            onImported={list.refresh}
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>
+            {t("pages.master.customers.new")}
+          </Button>
+        </Space>
       }
     >
       <Space wrap size="middle" style={{ marginBottom: 12 }}>

@@ -71,27 +71,42 @@ def _enable_auto_confirm(client, headers: dict) -> None:
 
 
 def _first_customer_id(client, headers: dict, code: str = "C001") -> str:
-    r = client.get("/api/v1/customers", headers=headers)
-    assert r.status_code == 200
-    for c in r.json()["items"]:
+    for c in _all_items(client, headers, "/api/v1/customers"):
         if c["code"] == code:
             return c["id"]
     raise AssertionError(f"Customer {code} not seeded")
 
 
+def _all_items(client, headers: dict, path: str) -> list[dict]:
+    """Every item from a paginated list endpoint.
+
+    These endpoints page at 20 by default. Scanning only the first page makes
+    the `_first_*` helpers below report a seeded row as "not seeded" the moment
+    enough other rows exist — which is exactly what happens after a bulk import
+    has added a few dozen products. Page through rather than assuming the whole
+    catalogue fits on one screen.
+    """
+    items: list[dict] = []
+    page = 1
+    while True:
+        r = client.get(f"{path}?page={page}&page_size=100", headers=headers)
+        assert r.status_code == 200
+        body = r.json()
+        items.extend(body["items"])
+        if not body["items"] or len(items) >= body["total"]:
+            return items
+        page += 1
+
+
 def _first_product(client, headers: dict, sku: str = "VG001") -> dict:
-    r = client.get("/api/v1/products", headers=headers)
-    assert r.status_code == 200
-    for p in r.json()["items"]:
+    for p in _all_items(client, headers, "/api/v1/products"):
         if p["sku"] == sku:
             return p
     raise AssertionError(f"Product {sku} not seeded")
 
 
 def _first_unit_id(client, headers: dict, code: str = "jin") -> str:
-    r = client.get("/api/v1/units", headers=headers)
-    assert r.status_code == 200
-    for u in r.json()["items"]:
+    for u in _all_items(client, headers, "/api/v1/units"):
         if u["code"] == code:
             return u["id"]
     raise AssertionError(f"Unit {code} not seeded")
