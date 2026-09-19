@@ -540,3 +540,95 @@ def test_health_still_warns_when_mistral_is_selected_but_unkeyed(client, monkeyp
 
     body = client.get("/api/health").json()
     assert body["image_extraction_is_simulated"] is True
+
+
+# --- a table the OCR answered with a cropped figure ---------------------------
+#
+# Observed live on a real 14-row supplier order (2026-09-19): the /ocr endpoint
+# returned the page header as text and the whole table as a figure reference
+# `tbl-0.md`. With `include_image_base64` off the figure was never in the
+# response, so the line parser turned the header into five "order lines" —
+# including a "task count" of 14 read as a real quantity. Those five rows looked
+# like a parsed order to everyone downstream.
+
+# The header block of that real document, verbatim.
+FIGURE_ONLY_MARKDOWN = (
+    "广东崇元绿色食品有限公司\n\n"
+    "采购单位: 广东来赫生餐饮有限公司\n"
+    "打印时间: 2026-09-02 20:49:01\n"
+    "任务数: 14\n\n"
+    "tbl-0.md"
+)
+
+
+def test_a_table_returned_as_a_figure_is_not_turned_into_order_lines(
+    tmp_path, monkeypatch, mistral_on
+):
+    """The failure that shipped. Header-only markdown plus a figure reference
+    must yield NO lines, not five confident-looking rows."""
+    path = tmp_path / "order.png"
+    path.write_bytes(PNG_BYTES)
+    _capture(monkeypatch, _payload(FIGURE_ONLY_MARKDOWN, score=0.30, minimum=0.30, figures=1))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="order.png"
+    )
+
+    assert result.lines == [], [l.product_name for l in result.lines]
+    assert result.requires_human_review is True
+    # The reviewer is told WHY, so they know to transcribe instead of editing.
+    assert "figure" in result.parser_notes
+    assert "任务数" not in [l.product_name for l in result.lines]
+
+
+def test_a_figure_filename_is_never_a_product_line(tmp_path, monkeypatch, mistral_on):
+    """`tbl-0.md` is the vendor's name for a figure, not something a customer
+    ordered. It must not survive markdown cleanup at all."""
+    path = tmp_path / "order.png"
+    path.write_bytes(PNG_BYTES)
+    _capture(monkeypatch, _payload("tbl-0.md\n土豆 50斤", figures=0))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="order.png"
+    )
+
+    names = [l.product_name for l in result.lines]
+    assert "土豆" in names
+    assert "tbl-0.md" not in names
+    assert not any("tbl-" in n for n in names), names
+
+
+def test_a_page_with_figures_that_still_has_quantities_keeps_its_lines(
+    tmp_path, monkeypatch, mistral_on
+):
+    """The guard must not fire when the OCR DID read quantities. A photo can
+    legitimately carry a logo/stamp figure alongside real order rows — dropping
+    those rows would lose a real order."""
+    path = tmp_path / "note.png"
+    path.write_bytes(PNG_BYTES)
+    _capture(monkeypatch, _payload("土豆 50斤\n大白菜 30斤", figures=2))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="note.png"
+    )
+
+    assert [(l.product_name, l.quantity) for l in result.lines] == [
+        ("土豆", 50.0),
+        ("大白菜", 30.0),
+    ]
+    assert "discarding" not in result.parser_notes
+
+
+def test_no_figures_means_the_guard_cannot_fire(tmp_path, monkeypatch, mistral_on):
+    """Header-only text with no figure extracted is just a page with little on
+    it. There is nothing to blame, so the note must not claim a figure."""
+    path = tmp_path / "order.png"
+    path.write_bytes(PNG_BYTES)
+    _capture(monkeypatch, _payload(FIGURE_ONLY_MARKDOWN, figures=0))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="order.png"
+    )
+
+    assert result.lines, "without a figure there is nothing to discard"
+    assert "discarding" not in result.parser_notes

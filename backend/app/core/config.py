@@ -107,6 +107,22 @@ class Settings(BaseSettings):
     # The documented alias that tracks the newest OCR model. Pin a dated
     # snapshot (e.g. "mistral-ocr-2512") once the output has been validated.
     mistral_ocr_model: str = "mistral-ocr-latest"
+    # Which reader handles an IMAGE or a scanned PDF.
+    #   "mistral" — the /ocr document-AI endpoint (cheap, fast, returns
+    #                markdown). Observed failure: on a dense supplier table it
+    #                can return the whole table as a CROPPED FIGURE reference
+    #                (`tbl-0.md`) instead of text, in which case the markdown
+    #                carries only the page header and every line item is lost.
+    #   "pixtral" — a vision chat model given the image and an explicit prompt,
+    #                which reads the table in place. Slower and pricier per
+    #                page, but it does not discard a table as a figure.
+    image_ocr_provider: str = "mistral"
+    # Vision model used when image_ocr_provider == "pixtral". Must be a model
+    # that accepts an image_url content part.
+    pixtral_ocr_model: str = "pixtral-large-latest"
+    # Seconds allowed for one vision read. A dense table on a large photo can
+    # take well past the 120s the OCR endpoint needs.
+    vision_ocr_timeout: float = 180.0
 
     # --- OCR quality-assurance gates ------------------------------------------
     # A per-field confidence below this is treated as a hard flag (the field is

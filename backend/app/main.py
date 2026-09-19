@@ -193,6 +193,12 @@ def health():
         # it yields canned demo lines. See `image_extraction_is_simulated`.
         "ai_provider": settings.ai_provider,
         "image_extraction_is_simulated": settings.image_extraction_is_simulated,
+        # Which reader handles a photo: "mistral" is the /ocr endpoint, which on
+        # a dense supplier table can answer with a cropped FIGURE and lose every
+        # line; "pixtral" sends the image to a vision chat model instead. The two
+        # behave differently enough that "which one is running" is the first
+        # thing to check when an extraction looks wrong.
+        "image_ocr_provider": settings.image_ocr_provider,
     }
 
 

@@ -23,6 +23,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -31,6 +32,8 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
+
+logger = logging.getLogger("erp.ai.adapters")
 
 
 @dataclass
@@ -969,6 +972,26 @@ def _media_type_for(content: bytes, filename: str | None = None) -> str:
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 
+# A filename the vendor invents for a figure it cropped out of the page,
+# e.g. `tbl-0.md`, `img-1.jpeg`. These are NOT page content: when the OCR
+# endpoint decides a dense table is a figure it emits one of these in place of
+# the table, and the line parser would happily read `tbl-0.md` as a product
+# name at quantity 0. Observed live on a real 14-row supplier order.
+_VENDOR_FIGURE_NAME_RE = re.compile(
+    r"^(?:tbl|table|img|image|fig|figure)[-_]?\d+\.(?:md|png|jpe?g|webp|gif|bmp)$",
+    re.IGNORECASE,
+)
+
+# A number immediately followed by a unit — the smallest signal that a piece
+# of text actually contains order rows rather than page furniture. Used to tell
+# "the OCR read the table" apart from "the OCR returned the table as a figure".
+_ORDER_QUANTITY_HINT_RE = re.compile(
+    r"\d+(?:\.\d+)?\s*"
+    r"(?:斤|公斤|千克|克|箱|袋|包|个|只|份|件|瓶|条|块|把|棵|根|盒|桶|"
+    r"kg|g|jin|box|boxes|bag|bags|pcs|piece|pieces|case|cases|unit|units)",
+    re.IGNORECASE,
+)
+
 
 def markdown_to_text(markdown: str) -> str:
     """Turn Mistral's markdown into plain lines the line parser can read.
@@ -984,6 +1007,8 @@ def markdown_to_text(markdown: str) -> str:
       is flattened to `土豆 50 斤`, which the existing parser reads correctly.
     * `|---|---|` separator rows and `**`/`#` decoration would otherwise end up
       inside a product name.
+    * `tbl-0.md` is the vendor's name for a figure it cropped out of the page.
+      It is not something a customer ordered, and it is not page text either.
 
     Anything the parser still cannot read falls through to the existing
     name-only behaviour, and the review gate flags it — this only removes noise,
@@ -996,6 +1021,10 @@ def markdown_to_text(markdown: str) -> str:
         line = line.replace("**", "").lstrip("#").strip()
         # A table separator row (`|---|---|`) carries no content at all.
         if line and "-" in line and re.fullmatch(r"[\s|:-]+", line):
+            continue
+        # A cropped-figure placeholder. Dropping it here is what stops
+        # `tbl-0.md` from becoming a zero-quantity order line.
+        if line and _VENDOR_FIGURE_NAME_RE.fullmatch(line):
             continue
         if "|" in line:
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -1109,6 +1138,27 @@ class MistralOcrExtractor:
             lines = parse_text_lines(text)
             notes.append(f"ocr_lines={len(lines)}")
 
+            # --- Figure-only page guard -----------------------------------
+            # The OCR endpoint is allowed to answer a dense table with a
+            # CROPPED FIGURE instead of characters. When it does, the markdown
+            # holds the page header and nothing else, `include_image_base64` is
+            # off so the figure is not in the response at all, and the legacy
+            # line parser turns the header into order lines — a "task count of
+            # 14" was emitted as a real product at quantity 14 on a live order.
+            #
+            # Detect it and drop those lines rather than showing the reviewer
+            # five confident-looking rows that were never on the page. Falling
+            # through with zero lines is deliberate: the empty-result branch
+            # below already marks the document for review and names the reason,
+            # so the reviewer is told to transcribe instead of being handed a
+            # partly-invented order.
+            if figures and lines and not _ORDER_QUANTITY_HINT_RE.search(text):
+                notes.append(
+                    f"table returned as {figures} figure(s) instead of text — "
+                    f"discarding {len(lines)} header-only line(s)"
+                )
+                lines = []
+
         if confidence is not None:
             for ln in lines:
                 ln.confidence = confidence
@@ -1209,6 +1259,274 @@ class MistralOcrExtractor:
         return markdown, confidence, worst, len(pages), figures, degraded
 
 
+# --- Vision table read (Pixtral chat) ----------------------------------------
+
+_VISION_TABLE_PROMPT = """\
+You are transcribing a Chinese supplier purchase order (采购订单) from a photograph.
+
+Reply with ONE JSON object and nothing else — no prose, no markdown fence:
+
+{"supplier": <string or null>,
+ "purchase_unit": <string or null>,
+ "print_time": <string or null>,
+ "task_count": <integer or null>,
+ "lines": [{"line_no": <integer>,
+            "product_name": <string>,
+            "total_quantity": <number or null>,
+            "total_unit": <string or null>,
+            "notes": <string or null>,
+            "breakdowns": [{"customer_name": <string or null>,
+                            "quantity": <number or null>,
+                            "unit": <string or null>,
+                            "note": <string or null>}]}]}
+
+Rules — follow them exactly:
+1. `lines` holds ONLY rows of the order table. The page header (the supplier
+   name, 采购单位, 打印时间, 任务数) is NOT a row; put it in the top-level
+   fields instead. A row number alone is not a product.
+2. One entry per product row. When a product row carries per-customer delivery
+   detail, put each destination in `breakdowns`; otherwise `breakdowns` is [].
+3. Copy numbers exactly as printed, including decimals.
+4. If a cell is unreadable or missing, use null. Never guess, never invent a
+   product, never fill a gap from what you expect to see.
+5. If there is no order table in the image at all, return {"lines": []}.
+"""
+
+
+class VisionTableExtractor:
+    """Reads a supplier-order photo with a vision chat model instead of /ocr.
+
+    Why this exists: the `/ocr` document-AI endpoint is allowed to answer a
+    dense table with a CROPPED FIGURE reference rather than characters. With
+    `include_image_base64` off that figure is not in the response at all, so a
+    14-row order arrived as five header fragments — including a literal
+    `tbl-0.md` and a "task count" of 14 read as a quantity. `MistralOcrExtractor`
+    now detects that case, but detecting it is not the same as reading the page.
+
+    A vision chat model is given the image itself plus an explicit prompt, so
+    there is nowhere for the table to be "left out": either it reads the rows or
+    it says there are none.
+
+    Trade-off, stated plainly: this costs more per page and takes longer than
+    `/ocr`. It is worth it because a misread quantity on a food order is a
+    delivery of the wrong goods, which is the one thing this system exists to
+    prevent. Confidence is deliberately left None — a chat model gives no score,
+    and the review gate reads None as "unverified", so every line is flagged.
+    """
+
+    def extract(
+        self,
+        *,
+        source_type: str,
+        raw_text: str | None = None,
+        file_path: str | None = None,
+        original_filename: str | None = None,
+    ) -> ExtractionResult:
+        # Only a photograph needs a vision read. Typed text, spreadsheets and
+        # PDFs with a text layer are handled by the deterministic paths; paying
+        # a vision model to re-read characters we already have is waste.
+        if source_type == "pdf" and file_path:
+            # A scanned PDF would need page rendering first, which is a separate
+            # piece of work. Hand it to the OCR path so nothing regresses.
+            return MistralOcrExtractor().extract(
+                source_type=source_type,
+                raw_text=raw_text,
+                file_path=file_path,
+                original_filename=original_filename,
+            )
+        if source_type != "image" or not file_path:
+            return MockExtractor().extract(
+                source_type=source_type,
+                raw_text=raw_text,
+                file_path=file_path,
+                original_filename=original_filename,
+            )
+
+        if not settings.mistral_ocr_is_configured:
+            raise RuntimeError(
+                "image_ocr_provider=pixtral but ERP_MISTRAL_API_KEY is empty or "
+                "still a placeholder — refusing to fall back to the mock OCR, "
+                "which would invent line items"
+            )
+
+        with open(file_path, "rb") as f:
+            content = f.read()
+        if not content:
+            raise RuntimeError(f"attachment is empty, nothing to read: {file_path}")
+
+        b64 = base64.b64encode(content).decode("ascii")
+        media_type = _media_type_for(content, original_filename)
+
+        raw_reply, model = self._vision_read(b64, media_type)
+
+        notes = [f"pixtral {model}"]
+        try:
+            payload = _parse_json_strict(raw_reply)
+        except Exception as exc:  # noqa: BLE001
+            # An unparseable answer is a failed read, not an empty order. Say so
+            # and flag; never let a JSON error masquerade as "no lines found".
+            note = f"vision reply was not parseable JSON: {exc}"
+            logger.error("VisionTableExtractor: %s; reply=%r", note, raw_reply[:400])
+            result = apply_review_gate(ExtractionResult(
+                lines=[],
+                parser_notes=f"{note}",
+                doc_type="ocr_image",
+                image_path=file_path,
+            ))
+            result.parser_notes = f"{result.parser_notes}; {note}".strip("; ")
+            result.requires_human_review = True
+            return result
+
+        header = {
+            k: payload.get(k)
+            for k in ("supplier", "purchase_unit", "print_time", "task_count")
+            if payload.get(k) is not None
+        }
+        lines: list[RawLine] = []
+        structured_lines: list[dict] = []
+        unreadable = 0
+
+        for i, row in enumerate(payload.get("lines") or []):
+            if not isinstance(row, dict):
+                continue
+            name = (row.get("product_name") or "").strip()
+            if not name:
+                # A row with no product name is not a row we can act on. Skip it
+                # rather than emitting a blank line for someone to delete.
+                continue
+            qty = _as_float(row.get("total_quantity"))
+            if qty is None:
+                unreadable += 1
+            breakdowns: list[dict] = []
+            for bd in row.get("breakdowns") or []:
+                if not isinstance(bd, dict):
+                    continue
+                breakdowns.append({
+                    "raw": (bd.get("customer_name") or ""),
+                    "customer_name": bd.get("customer_name"),
+                    "customer_code": None,
+                    "quantity": _as_float(bd.get("quantity")),
+                    "unit": bd.get("unit"),
+                    "note": bd.get("note"),
+                    "menu_code": None,
+                    "menu_label": None,
+                })
+            try:
+                line_no = int(row.get("line_no") or (i + 1))
+            except (TypeError, ValueError):
+                line_no = i + 1
+            structured_lines.append({
+                "line_no": line_no,
+                "raw_text": name,
+                "product_name": name,
+                "total_quantity": qty,
+                "total_unit": row.get("total_unit"),
+                "breakdowns": breakdowns,
+                "notes": row.get("notes"),
+                "extra": {},
+            })
+            lines.append(RawLine(
+                product_name=name,
+                quantity=qty,
+                unit=row.get("total_unit"),
+                notes=row.get("notes"),
+                breakdowns=breakdowns,
+                header=header or None,
+                # A chat model reports no confidence. None is the honest value:
+                # the review gate treats it as unverified and flags the line.
+                confidence=None,
+            ))
+
+        structured = None
+        doc_type = "ocr_image"
+        if structured_lines:
+            structured = {
+                "variant": "vision",
+                "parser_notes": "pixtral vision read",
+                "header": header,
+                "lines": structured_lines,
+            }
+            doc_type = "supplier_order_table"
+        notes.append(f"vision_lines={len(lines)}")
+        if unreadable:
+            notes.append(f"{unreadable} line(s) missing a quantity")
+
+        result = apply_review_gate(ExtractionResult(
+            lines=lines,
+            parser_notes="; ".join(notes),
+            doc_type=doc_type,
+            structured=structured,
+            overall_confidence=None,
+            image_path=file_path,
+        ))
+
+        if not result.lines:
+            extra = "no line items could be read from the document"
+            result.parser_notes = (result.parser_notes + "; " + extra).strip("; ")
+            result.requires_human_review = True
+        return result
+
+    def _vision_read(self, b64: str, media_type: str) -> tuple[str, str]:
+        """POST one image to a vision chat model. Returns (reply, model)."""
+        import httpx
+
+        model = settings.pixtral_ocr_model
+        url = f"{settings.mistral_base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {settings.mistral_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": _VISION_TABLE_PROMPT},
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:{media_type};base64,{b64}",
+                        },
+                    ],
+                }
+            ],
+            # Extraction is transcription, not composition. A low temperature
+            # keeps the model from "helpfully" normalising a quantity it misread.
+            "temperature": 0.0,
+        }
+        resp = httpx.post(
+            url, headers=headers, json=payload,
+            timeout=settings.vision_ocr_timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        choices = data.get("choices") or []
+        content = ""
+        if choices:
+            content = ((choices[0] or {}).get("message") or {}).get("content") or ""
+        if isinstance(content, list):
+            # Some deployments return content parts instead of a plain string.
+            content = "".join(
+                (part.get("text") or "") for part in content if isinstance(part, dict)
+            )
+        return content, model
+
+
+def _as_float(value: Any) -> float | None:
+    """Coerce a JSON number to float, or None when it is missing/unreadable.
+
+    The prompt tells the model to answer null rather than guess, so None here is
+    a real signal — it is counted and surfaced, not silently turned into 0. A
+    zero would be worse than nothing: it reads as a confirmed quantity.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def get_extractor():
     """Factory: returns MockExtractor when settings.ai_provider == 'mock'."""
     provider = (settings.ai_provider or "mock").lower()
@@ -1224,6 +1542,8 @@ def get_extractor():
         # read a page, which is the only moment the key matters. The unkeyed
         # state is still visible: /api/health reports
         # `image_extraction_is_simulated: true`.
+        if (settings.image_ocr_provider or "").strip().lower() == "pixtral":
+            return VisionTableExtractor()
         return MistralOcrExtractor()
     if provider == "aliyun_qwen":
         if not (
