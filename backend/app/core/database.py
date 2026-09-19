@@ -220,6 +220,38 @@ def _add_column_if_missing(table: str, column: str, ddl_type: str) -> None:
         )
 
 
+def _backfill_timestamp(table: str, column: str) -> None:
+    """Give rows written before an added timestamp column a value.
+
+    Same best-effort contract as `_add_column_if_missing`: a failure is logged,
+    never raised, because a missing backfill must not stop the service booting —
+    but it is never silently swallowed either.
+    """
+    from sqlalchemy import inspect, text
+
+    try:
+        insp = inspect(engine)
+        if table not in insp.get_table_names():
+            return
+        if not any(c["name"] == column for c in insp.get_columns(table)):
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"UPDATE {table} SET {column} = CURRENT_TIMESTAMP "
+                    f"WHERE {column} IS NULL"
+                )
+            )
+    except Exception:  # pragma: no cover - best effort, never block startup
+        logger.warning(
+            "init_db: could NOT backfill %s.%s — old rows keep NULL, which "
+            "sorts FIRST on a descending sort",
+            table,
+            column,
+            exc_info=True,
+        )
+
+
 def init_db() -> None:
     """Create all tables (dev/demo path; use migrations in production)."""
     from app import models  # noqa: F401  (register all models)
@@ -240,3 +272,9 @@ def init_db() -> None:
     # The intake original itself, not just a path to it. A path into the
     # container is lost on the next deploy; see `models/intake.py`.
     _add_column_if_missing("intake_documents", "file_data", "BLOB")
+    # A retried job appends a second extraction row, so the rows need a
+    # timestamp to be told apart. Backfilled below, because a NULL sorts FIRST
+    # on a descending sort in Postgres — without the backfill the stale rows
+    # would win the very query the column was added to fix.
+    _add_column_if_missing("intake_extractions", "created_at", "DATETIME")
+    _backfill_timestamp("intake_extractions", "created_at")

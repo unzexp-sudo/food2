@@ -971,6 +971,11 @@ def _media_type_for(content: bytes, filename: str | None = None) -> str:
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+# The filename INSIDE an image placeholder, e.g. the `tbl-0.md` in
+# `![](tbl-0.md)`. `_MD_IMAGE_RE` deliberately blanks the whole placeholder,
+# because nothing in it may reach the line parser — so reading the name back out
+# needs a pattern of its own.
+_MD_IMAGE_TARGET_RE = re.compile(r"!\[[^\]]*\]\(([^)]*)\)")
 
 # A filename the vendor invents for a figure it cropped out of the page,
 # e.g. `tbl-0.md`, `img-1.jpeg`. These are NOT page content: when the OCR
@@ -991,6 +996,50 @@ _ORDER_QUANTITY_HINT_RE = re.compile(
     r"kg|g|jin|box|boxes|bag|bags|pcs|piece|pieces|case|cases|unit|units)",
     re.IGNORECASE,
 )
+
+
+def _normalize_md_line(raw_line: str) -> str:
+    """Strip the markdown furniture that would otherwise be read as a product.
+
+    Shared with `_figure_reference_count` so the two agree on what a line IS:
+    counting references against the raw markdown missed the real document, whose
+    placeholder was a link and only becomes `tbl-0.md` after this runs.
+    """
+    line = _MD_IMAGE_RE.sub(" ", raw_line)
+    line = _MD_LINK_RE.sub(r"\1", line)
+    return line.replace("**", "").lstrip("#").strip()
+
+
+def _figure_reference_count(markdown: str) -> int:
+    """How many lines are the vendor's placeholder for a table it cropped out.
+
+    Counted on the normalised line, because the vendor spells this three ways and
+    all three mean the same thing:
+
+      * `[tbl-0.md](tbl-0.md)` — a LINK. This is what the real 14-row order
+        actually contained, and it is why counting the raw line failed: on its
+        own the raw line is not a filename at all.
+      * `tbl-0.md` — the bare name.
+      * `![](tbl-0.md)` — an image placeholder.
+
+    This is the only evidence that a table was dropped. The vendor's `images`
+    array is requested without base64, so on the real document it came back
+    EMPTY and a count based on it was zero.
+    """
+    count = 0
+    for raw_line in (markdown or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        image_target = _MD_IMAGE_TARGET_RE.search(line)
+        if image_target and _VENDOR_FIGURE_NAME_RE.fullmatch(
+            (image_target.group(1) or "").strip()
+        ):
+            count += 1
+            continue
+        if _VENDOR_FIGURE_NAME_RE.fullmatch(_normalize_md_line(line)):
+            count += 1
+    return count
 
 
 def markdown_to_text(markdown: str) -> str:
@@ -1016,9 +1065,7 @@ def markdown_to_text(markdown: str) -> str:
     """
     out: list[str] = []
     for raw_line in (markdown or "").splitlines():
-        line = _MD_IMAGE_RE.sub(" ", raw_line)
-        line = _MD_LINK_RE.sub(r"\1", line)
-        line = line.replace("**", "").lstrip("#").strip()
+        line = _normalize_md_line(raw_line)
         # A table separator row (`|---|---|`) carries no content at all.
         if line and "-" in line and re.fullmatch(r"[\s|:-]+", line):
             continue
@@ -1132,12 +1179,13 @@ class MistralOcrExtractor:
         # on 2026-09-19: a page whose table came back as `tbl-0.md` reported
         # zero figures and four header lines, so a guard keyed on `figures`
         # never fired. The reference in the markdown is the tell.
-        figure_refs = sum(
-            1
-            for ln in markdown.splitlines()
-            if _VENDOR_FIGURE_NAME_RE.fullmatch(ln.strip())
-        )
-        figure_evidence = figures + figure_refs
+        figure_refs = _figure_reference_count(markdown)
+        # `or`, not `+`: the array and the placeholders are two views of the SAME
+        # figures. Summing them reported four figures for a page that had two.
+        # The array is preferred when it is populated; when it is not — which is
+        # the real failure, because we ask for it without base64 — the reference
+        # count is the only evidence there is.
+        figure_evidence = figures or figure_refs
 
         # Markdown is not text — see markdown_to_text. Same dispatch order as the
         # typed path: a recognized supplier-order table keeps its header and its
@@ -1226,10 +1274,10 @@ class MistralOcrExtractor:
             # gate would happily approve an EMPTY order.
             extra = "no line items could be read from the document"
             if figure_evidence:
-                extra += (
-                    f" ({figure_evidence} figure(s)/reference(s) were returned "
-                    f"instead of text)"
-                )
+                # "figure(s)" covers both the vendor's images array and a
+                # placeholder reference in the markdown: either way the page
+                # answered with a picture where the table should have been.
+                extra += f" ({figure_evidence} figure(s) were extracted instead of text)"
             result.parser_notes = (result.parser_notes + "; " + extra).strip("; ")
             result.requires_human_review = True
         return result

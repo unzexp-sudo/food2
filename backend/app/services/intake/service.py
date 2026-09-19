@@ -726,9 +726,23 @@ def retry_job(
 # --- Extraction ---------------------------------------------------------------
 
 def get_extraction_for_job(db: Session, job_id: str) -> IntakeExtraction | None:
+    """The job's CURRENT extraction — its newest, not an arbitrary one.
+
+    Every run appends a row rather than replacing one, because the raw AI output
+    is an immutable audit trail. So a retried job holds several rows, and
+    ordering by `id` picked whichever UUID happened to sort first.
+
+    That is not a theoretical concern. Observed 2026-09-19: a job retried after
+    the figure-only fix still served the OLD five-line read — `tbl-0.md`
+    included, a line the new code cannot produce — which makes a re-processed
+    document look as though nothing changed. Anyone re-running a document to get
+    a better read is exactly the person this has to be right for.
+    """
     return (
         db.query(IntakeExtraction)
         .filter(IntakeExtraction.job_id == job_id)
-        .order_by(IntakeExtraction.id)
+        # NULLs last: a row written before `created_at` existed must lose to a
+        # real timestamp, not win it. Postgres sorts NULLs first on DESC.
+        .order_by(IntakeExtraction.created_at.desc().nulls_last())
         .first()
     )

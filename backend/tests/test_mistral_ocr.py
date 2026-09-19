@@ -562,13 +562,16 @@ def test_health_still_warns_when_mistral_is_selected_but_unkeyed(client, monkeyp
 # including a "task count" of 14 read as a real quantity. Those five rows looked
 # like a parsed order to everyone downstream.
 
-# The header block of that real document, verbatim.
+# The real document's markdown, verbatim — captured by replaying the production
+# OCR call against the same file. Note the last line: the placeholder is a
+# markdown LINK, not a bare filename, which is why it survived as a product
+# named `tbl-0.md` (the link text is what `_MD_LINK_RE` keeps).
 FIGURE_ONLY_MARKDOWN = (
-    "广东崇元绿色食品有限公司\n\n"
-    "采购单位: 广东来赫生餐饮有限公司\n"
-    "打印时间: 2026-09-02 20:49:01\n"
+    "# 广东崇元绿色食品有限公司\n\n"
+    "采购单位: 广东来赫生餐饮有限公司\n\n"
+    "打印时间: 2026-09-02 20:49:01\n\n"
     "任务数: 14\n\n"
-    "tbl-0.md"
+    "[tbl-0.md](tbl-0.md)"
 )
 
 
@@ -676,3 +679,22 @@ def test_no_figure_evidence_at_all_means_the_guard_cannot_fire(
 
     assert result.lines, "without any figure evidence there is nothing to discard"
     assert "discarding" not in result.parser_notes
+
+
+def test_every_spelling_of_a_cropped_table_placeholder_is_counted():
+    """The vendor names a dropped table three ways, and all three mean the same
+    thing. `markdown_to_text` sees each of them only AFTER normalisation, so the
+    count has to be taken there too — counting the raw line found none of them
+    on the real document, whose placeholder was the link form."""
+    from app.ai.adapters import _figure_reference_count
+
+    assert _figure_reference_count("[tbl-0.md](tbl-0.md)") == 1
+    assert _figure_reference_count("tbl-0.md") == 1
+    assert _figure_reference_count("![](tbl-0.md)") == 1
+    assert _figure_reference_count("![img-3.jpeg](img-3.jpeg)") == 1
+    # Real content is not a placeholder, however many digits it has.
+    assert _figure_reference_count("土豆 50斤") == 0
+    assert _figure_reference_count("采购单位: 广东来赫生餐饮有限公司") == 0
+    assert _figure_reference_count("") == 0
+    # One per line, not one per document.
+    assert _figure_reference_count("tbl-0.md\ntbl-1.md") == 2

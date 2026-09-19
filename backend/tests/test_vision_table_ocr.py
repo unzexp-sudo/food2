@@ -365,13 +365,15 @@ def test_a_missing_key_is_refused_rather_than_falling_back_to_mock(tmp_path, mon
 # need it, stays silent on the ones that do not, and can never turn an intake
 # failure into an intake outage.
 
-# The header block of the real 14-row order that shipped as five lines.
+# The real 14-row order's markdown, verbatim. The placeholder is a markdown LINK
+# `[tbl-0.md](tbl-0.md)` — on the raw line it is not a filename at all, which is
+# why the reference has to be counted after markdown normalisation.
 FIGURE_ONLY_MARKDOWN = (
-    "广东崇元绿色食品有限公司\n\n"
-    "采购单位: 广东来赫生餐饮有限公司\n"
-    "打印时间: 2026-09-02 20:49:01\n"
+    "# 广东崇元绿色食品有限公司\n\n"
+    "采购单位: 广东来赫生餐饮有限公司\n\n"
+    "打印时间: 2026-09-02 20:49:01\n\n"
     "任务数: 14\n\n"
-    "tbl-0.md"
+    "[tbl-0.md](tbl-0.md)"
 )
 
 

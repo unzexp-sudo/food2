@@ -5,7 +5,7 @@ from datetime import date, datetime
 from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import TimestampMixin, UUIDMixin
+from app.models.base import TimestampMixin, UUIDMixin, utcnow
 
 
 class IntakeDocument(TimestampMixin):
@@ -57,6 +57,16 @@ class IntakeJob(TimestampMixin):
 
 class IntakeExtraction(UUIDMixin):
     __tablename__ = "intake_extractions"
+
+    # When this read happened. Added after the table existed — and nullable —
+    # because a retried job holds SEVERAL rows (each run appends one; the raw
+    # output is an immutable audit trail) and nothing else tells them apart.
+    # Without it the newest read cannot be identified, so a re-processed
+    # document could be shown with its superseded extraction. See
+    # `get_extraction_for_job`.
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime, default=utcnow, nullable=True
+    )
 
     job_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("intake_jobs.id"), index=True, nullable=False
