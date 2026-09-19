@@ -131,14 +131,11 @@ def _delivery_out_for_delivery(client, headers) -> dict:
     from tests.test_delivery import _build_chain_to_picked
 
     data = _build_chain_to_picked(client, headers)
+    # The final pick created the delivery; `/deliveries/generate` is a backfill
+    # and would return nothing here.
+    delivery_id = data["delivery_id"]
     r = client.post(
-        "/api/v1/deliveries/generate", headers=headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    )
-    assert r.status_code == 201, r.text
-    delivery = r.json()["created"][0]
-    r = client.post(
-        f"/api/v1/deliveries/{delivery['id']}/status", headers=headers,
+        f"/api/v1/deliveries/{delivery_id}/status", headers=headers,
         json={"status": "out_for_delivery"},
     )
     assert r.status_code == 200, r.text
@@ -163,11 +160,7 @@ def test_picking_a_delivery_does_not_text_the_customer(client, warehouse_headers
     from tests.test_delivery import _build_chain_to_picked
 
     data = _build_chain_to_picked(client, warehouse_headers)
-    r = client.post(
-        "/api/v1/deliveries/generate", headers=warehouse_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    )
-    delivery_id = r.json()["created"][0]["id"]
+    delivery_id = data["delivery_id"]
     r = client.post(
         f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
         json={"status": "picked"},

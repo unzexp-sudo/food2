@@ -541,6 +541,15 @@ const zh = {
       photo: "照片（可选）",
       completeSuccess: "配送已完成",
       noLines: "暂无明细。",
+      generate: "生成配送单",
+      generateTitle: "生成配送单",
+      generateHint:
+        "为所选日期下拣货已完成的订单各生成一张配送单。该日期已有配送单的订单会被跳过，因此可以重复执行。",
+      deliveryDate: "配送日期",
+      generateSuccess: "已生成配送单：{{n}} 张",
+      generateNone: "无需生成——该日期下已拣货的订单都已有配送单。",
+      emptyHint:
+        "当前筛选条件下没有配送单。拣货单全部拣完后系统会自动生成；也可以在此按日期手动生成。",
     },
     finance: {
       invoices: {

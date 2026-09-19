@@ -541,6 +541,16 @@ const en = {
       photo: "Photo (optional)",
       completeSuccess: "Delivery completed",
       noLines: "No lines.",
+      generate: "Generate deliveries",
+      generateTitle: "Generate deliveries",
+      generateHint:
+        "Creates one delivery per order whose pick list for that date is fully picked. Orders that already have a delivery for that date are skipped, so running it again is safe.",
+      deliveryDate: "Delivery date",
+      generateSuccess: "Deliveries created: {{n}}",
+      generateNone:
+        "Nothing to generate — every picked order for that date already has a delivery.",
+      emptyHint:
+        "No deliveries for this filter. They are created automatically when a pick list is fully picked, or generate them here for a specific date.",
     },
     finance: {
       invoices: {

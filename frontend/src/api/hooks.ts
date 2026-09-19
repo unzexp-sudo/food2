@@ -108,8 +108,18 @@ export function useDetail<T>(url: string | null) {
 }
 
 export interface MutateOptions {
-  /** Custom success message; defaults to common.success translation. */
-  success?: string;
+  /**
+   * Custom success message; defaults to common.success translation.
+   *
+   * Pass `false` to suppress the success toast entirely. Use that when only the
+   * *response* knows what to say — a count, a list of skipped rows — because
+   * this string is resolved when the call is constructed, before the response
+   * exists, so a value assigned inside the async body would always be stale.
+   * The caller then issues its own message after awaiting. Without this, the
+   * only way to report a response-derived number was to abandon `run()`
+   * altogether and re-implement its loading and error handling.
+   */
+  success?: string | false;
   /** Called after a successful mutation (e.g. refresh a list). */
   onSuccess?: () => void;
   /**
@@ -143,7 +153,9 @@ export function useMutate() {
       setLoading(true);
       try {
         await fn();
-        message?.success(options?.success ?? t("common.success"));
+        if (options?.success !== false) {
+          message?.success(options?.success ?? t("common.success"));
+        }
         options?.onSuccess?.();
         return true;
       } catch (error) {

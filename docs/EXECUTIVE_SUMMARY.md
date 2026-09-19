@@ -210,7 +210,7 @@ draft → sent → partially_received → received → closed
 - Driver assignment
 - Pick confirmation (scan or checklist)
 - Proof of delivery: photo, signature, timestamp, GPS
-- Status: picked → out_for_delivery → delivered → failed/partial
+- Status: scheduled → picked → out_for_delivery → delivered → failed/partial
 
 On delivery confirmation → trigger billing eligibility.
 

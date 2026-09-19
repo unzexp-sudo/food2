@@ -32,6 +32,10 @@ Picking:
   - List → "picking" on first pick, "picked" when all lines picked/short.
   - When a pick list is fully picked: set its orders to "fulfilled" ONLY
     when ALL their lines across ALL pick lists are picked.
+  - When a pick list becomes "picked": generate the Delivery rows for that
+    date (see `pick_line`). This is the only moment the picked quantities a
+    delivery line is built from are known, and until it was wired here
+    nothing in the product called `generate_deliveries` at all.
 """
 from __future__ import annotations
 
@@ -56,6 +60,8 @@ from app.models import (
     PurchaseOrderLine,
     User,
 )
+# Sibling service, no cycle: `delivery` imports only models and core.
+from app.services.warehouse.delivery import generate_deliveries
 
 
 # --- Serializers -------------------------------------------------------------
@@ -363,6 +369,25 @@ def pick_line(
     # When a pick list is fully picked, mark its orders fulfilled ONLY when
     # ALL their lines across pick lists are picked/short.
     _maybe_fulfill_orders(db, pick_list)
+
+    # A fully picked list is the moment the goods physically exist to ship, and
+    # the only moment anything knows the picked quantities a delivery line is
+    # built from. Create the Delivery rows here.
+    #
+    # Why here and not left to the operator: nothing in the product ever called
+    # `generate_deliveries`. The endpoint existed and every *transition*
+    # endpoint was wired to the Delivery screen, but nothing created the rows —
+    # so that screen was always empty, and `out_for_delivery` (a Delivery
+    # status) could not be reached from the UI at all.
+    #
+    # Ordering matters: `generate_deliveries` only looks at pick lines whose
+    # list is already "picked", which is set just above. Idempotent by
+    # construction — it skips any order that already has a delivery for the
+    # date — so re-picking cannot duplicate one. It also writes its own audit
+    # row per delivery, which is where the operator sees this happen.
+    if pick_list.status == "picked":
+        generate_deliveries(db, delivery_date=pick_list.delivery_date, actor=actor)
+
     db.flush()
     return line
 

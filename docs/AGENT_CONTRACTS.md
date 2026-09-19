@@ -262,12 +262,25 @@ POST /inventory/loss            {product_id, quantity, reason}   R: warehouse/ad
 ```
 GET  /deliveries?date=&status=&driver_id=
 GET  /deliveries/{id}
-POST /deliveries/generate       {delivery_date} → creates one Delivery per order picked for that date  R: ops/admin/warehouse
+POST /deliveries/generate       {delivery_date} → BACKFILL. Creates one Delivery per order
+       whose pick list for that date is fully picked, skipping orders that already have one.
+       Normally a no-op: `picklists.pick_line` calls `generate_deliveries` itself the moment a
+       pick list flips to "picked", which is the only moment the picked quantities a delivery
+       line is built from are known. Returns {created, created_count, skipped_order_ids}.
+       Use this to recover orders picked before that wiring existed.  R: ops/admin/warehouse
 POST /deliveries/{id}/assign    {driver_id}     R: ops/admin
 POST /deliveries/{id}/status    {status}  (picked / out_for_delivery)  R: warehouse/admin/driver
+       → out_for_delivery is the customer-visible dispatch and texts the customer. A Delivery
+       only exists once its pick list is picked, so both buttons appear only after that.
 POST /deliveries/{id}/complete  {lines: [{delivery_line_id, delivered_quantity}], received_by?, photo?: UploadFile, gps_lat?, gps_lng?}
        → status delivered (or partial if short, failed if zero), stores POD, emits "delivery.completed"  R: warehouse/admin/driver
 ```
+
+**Order vs Delivery status.** `out_for_delivery` is a *Delivery* status, not an Order
+status. An order is marked `fulfilled` when its last pick line is picked — i.e. when the
+goods exist to ship, not when they arrive. The delivery leg (scheduled → picked →
+out_for_delivery → delivered) then runs alongside it, and `OrderTimeline` renders it in
+its own slot rather than as an order status.
 
 ### finance (finance agent)
 ```

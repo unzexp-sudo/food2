@@ -136,8 +136,19 @@ def _build_chain_to_picked(client, warehouse_headers, *, planned_qty=50.0, pick_
         headers=warehouse_headers,
         json={"picked_quantity": pick_qty},
     )
+    # Picking the last line now creates the delivery itself
+    # (`picklists.pick_line` → `generate_deliveries`), so read it back instead of
+    # calling `/deliveries/generate`, which is a no-op once the row exists. This
+    # assert is deliberate: the whole delivery leg is unreachable without it.
+    r = client.get(
+        "/api/v1/deliveries", headers=warehouse_headers,
+        params={"date": dd.isoformat()},
+    )
+    assert r.status_code == 200, r.text
+    rows = r.json()["items"]
+    assert rows, "picking the last line should have created the delivery"
     return {"pick_list": pk, "order_id": order_id, "picked_qty": pick_qty,
-            "delivery_date": dd}
+            "delivery_date": dd, "delivery_id": rows[0]["id"]}
 
 
 # ---------------------------------------------------------------------------
@@ -151,22 +162,64 @@ def test_deliveries_list_empty(client, ops_headers):
     assert "items" in body and "total" in body
 
 
+def test_picking_last_line_creates_delivery(client, warehouse_headers):
+    """The whole delivery leg hangs off this.
+
+    `picklists.pick_line` calls `generate_deliveries` the moment the pick list
+    flips to "picked". Before that wiring existed nothing in the product called
+    `generate_deliveries` at all, so an order reached `fulfilled` with no
+    Delivery row and no way to get one from the UI. This test is the thing that
+    fails if that call is ever dropped.
+    """
+    data = _build_chain_to_picked(client, warehouse_headers)
+    r = client.get(
+        "/api/v1/deliveries", headers=warehouse_headers,
+        params={"date": data["delivery_date"].isoformat()},
+    )
+    assert r.status_code == 200, r.text
+    rows = r.json()["items"]
+    assert len(rows) == 1, "exactly one delivery per order for the date"
+    d = rows[0]
+    assert d["status"] == "scheduled"
+    assert d["delivery_number"].startswith("DLV-")
+    assert d["route"]  # customer.delivery_zone
+    assert d["lines"], "a delivery with no lines is not shippable"
+    assert d["driver_id"] is None, "created unassigned; a human assigns the driver"
+
+
+def test_repicking_does_not_duplicate_the_delivery(client, warehouse_headers):
+    """`generate_deliveries` skips orders that already have a row for the date.
+
+    Re-picking (a correction, a second scan) must not fan out into two
+    deliveries for the same order.
+    """
+    data = _build_chain_to_picked(client, warehouse_headers)
+    pk = data["pick_list"]
+    # Pick the same line again with a different quantity.
+    r = client.post(
+        f"/api/v1/pick-lists/{pk['id']}/lines/{pk['lines'][0]['id']}/pick",
+        headers=warehouse_headers,
+        json={"picked_quantity": data["picked_qty"]},
+    )
+    assert r.status_code in (200, 201), r.text
+    r = client.get(
+        "/api/v1/deliveries", headers=warehouse_headers,
+        params={"date": data["delivery_date"].isoformat()},
+    )
+    assert r.json()["total"] == 1, "re-picking must not create a second delivery"
+
+
 def test_delivery_generate_and_assign(client, warehouse_headers, admin_headers):
     data = _build_chain_to_picked(client, warehouse_headers)
-    # Generate deliveries for the date.
-    r = client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    )
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["created_count"] >= 1
-    delivery = body["created"][0]
+    delivery_id = data["delivery_id"]
+    # The row already exists; assert the shape that a driver dispatch needs.
+    r = client.get(f"/api/v1/deliveries/{delivery_id}", headers=warehouse_headers)
+    assert r.status_code == 200, r.text
+    delivery = r.json()
     assert delivery["status"] == "scheduled"
     assert delivery["delivery_number"].startswith("DLV-")
     assert delivery["route"]  # customer.delivery_zone
     assert delivery["lines"]
-    delivery_id = delivery["id"]
 
     # Assign a driver (seeded driver@erp.local).
     from app.core.database import SessionLocal
@@ -184,11 +237,7 @@ def test_delivery_generate_and_assign(client, warehouse_headers, admin_headers):
 
 def test_delivery_assign_non_driver_404(client, warehouse_headers, admin_headers):
     data = _build_chain_to_picked(client, warehouse_headers)
-    r = client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    )
-    delivery_id = r.json()["created"][0]["id"]
+    delivery_id = data["delivery_id"]
     # Assign a non-driver user (ops).
     from app.core.database import SessionLocal
     from app.models import User
@@ -204,10 +253,7 @@ def test_delivery_assign_non_driver_404(client, warehouse_headers, admin_headers
 
 def test_delivery_status_picked_and_out(client, warehouse_headers, admin_headers):
     data = _build_chain_to_picked(client, warehouse_headers)
-    delivery_id = client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    ).json()["created"][0]["id"]
+    delivery_id = data["delivery_id"]
     # Move to picked.
     r = client.post(
         f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
@@ -228,10 +274,7 @@ def test_delivery_status_picked_and_out(client, warehouse_headers, admin_headers
 
 def test_delivery_complete_delivered(client, warehouse_headers, admin_headers, _capture_delivery_completed):
     data = _build_chain_to_picked(client, warehouse_headers)
-    delivery_id = client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    ).json()["created"][0]["id"]
+    delivery_id = data["delivery_id"]
     # Move to picked then out for delivery.
     client.post(f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
                 json={"status": "picked"})
@@ -272,10 +315,7 @@ def test_delivery_complete_delivered(client, warehouse_headers, admin_headers, _
 
 def test_delivery_complete_partial(client, warehouse_headers, admin_headers):
     data = _build_chain_to_picked(client, warehouse_headers, planned_qty=50.0, pick_full=True)
-    delivery_id = client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    ).json()["created"][0]["id"]
+    delivery_id = data["delivery_id"]
     client.post(f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
                 json={"status": "picked"})
     client.post(f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
@@ -304,10 +344,7 @@ def test_delivery_complete_partial(client, warehouse_headers, admin_headers):
 
 def test_delivery_complete_failed_all_zero(client, warehouse_headers, admin_headers):
     data = _build_chain_to_picked(client, warehouse_headers)
-    delivery_id = client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    ).json()["created"][0]["id"]
+    delivery_id = data["delivery_id"]
     client.post(f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
                 json={"status": "picked"})
     client.post(f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
@@ -327,10 +364,7 @@ def test_delivery_complete_failed_all_zero(client, warehouse_headers, admin_head
 
 def test_delivery_complete_409_when_scheduled(client, warehouse_headers, admin_headers):
     data = _build_chain_to_picked(client, warehouse_headers)
-    delivery_id = client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    ).json()["created"][0]["id"]
+    delivery_id = data["delivery_id"]
     # No status change — still scheduled.
     detail = client.get(f"/api/v1/deliveries/{delivery_id}", headers=warehouse_headers).json()
     r = client.post(
@@ -346,10 +380,7 @@ def test_delivery_complete_409_when_scheduled(client, warehouse_headers, admin_h
 def test_delivery_complete_with_multipart_photo(client, warehouse_headers, admin_headers):
     import json
     data = _build_chain_to_picked(client, warehouse_headers)
-    delivery_id = client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    ).json()["created"][0]["id"]
+    delivery_id = data["delivery_id"]
     client.post(f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
                 json={"status": "picked"})
     client.post(f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
@@ -382,32 +413,69 @@ def test_delivery_complete_with_multipart_photo(client, warehouse_headers, admin
     assert r2.content
 
 
-def test_delivery_generate_idempotent(client, warehouse_headers, admin_headers):
+def test_delivery_generate_is_noop_when_row_exists(client, warehouse_headers, admin_headers):
+    """`POST /deliveries/generate` is now a backfill, not the create step.
+
+    Picking creates the row, so by the time an operator presses Generate for a
+    date that was already picked there is nothing to create. It must report
+    `created_count == 0` rather than duplicate or error — the endpoint is still
+    the recovery path for orders stranded before the auto-create existed.
+    """
     data = _build_chain_to_picked(client, warehouse_headers)
-    # First generation.
-    r1 = client.post(
+    for _ in range(2):
+        r = client.post(
+            "/api/v1/deliveries/generate", headers=admin_headers,
+            json={"delivery_date": data["delivery_date"].isoformat()},
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["created_count"] == 0
+        assert r.json()["created"] == []
+    # And still exactly one row for the date.
+    r = client.get(
+        "/api/v1/deliveries", headers=warehouse_headers,
+        params={"date": data["delivery_date"].isoformat()},
+    )
+    assert r.json()["total"] == 1
+
+
+def test_delivery_generate_backfills_a_missing_row(client, warehouse_headers, admin_headers):
+    """The recovery path for orders stranded before the auto-create.
+
+    Simulates the historical failure by deleting the delivery row that picking
+    created, leaving the picked pick lines in place, then asking the endpoint to
+    generate. This is the exact shape of the stuck production orders.
+    """
+    data = _build_chain_to_picked(client, warehouse_headers)
+    from app.core.database import SessionLocal
+    from app.models import Delivery
+    with SessionLocal() as db:
+        row = db.get(Delivery, data["delivery_id"])
+        assert row is not None
+        db.delete(row)
+        db.commit()
+    # Gone.
+    r = client.get(
+        "/api/v1/deliveries", headers=warehouse_headers,
+        params={"date": data["delivery_date"].isoformat()},
+    )
+    assert r.json()["total"] == 0
+    # Generate rebuilds it from the picked pick lines.
+    r = client.post(
         "/api/v1/deliveries/generate", headers=admin_headers,
         json={"delivery_date": data["delivery_date"].isoformat()},
     )
-    assert r1.status_code == 201
-    first_count = r1.json()["created_count"]
-    # Second generation should skip the order.
-    r2 = client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    )
-    assert r2.status_code == 201
-    assert r2.json()["created_count"] == 0
-    assert first_count >= 1
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["created_count"] == 1, body
+    rebuilt = body["created"][0]
+    assert rebuilt["status"] == "scheduled"
+    assert rebuilt["order_id"] == data["order_id"]
+    assert rebuilt["lines"]
 
 
 def test_deliveries_list_filters(client, warehouse_headers, admin_headers):
     data = _build_chain_to_picked(client, warehouse_headers)
-    client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    )
-    # Filter by date.
+    # Filter by date. (The row was created by the final pick, not by a generate.)
     r = client.get("/api/v1/deliveries", headers=warehouse_headers,
                    params={"date": data["delivery_date"].isoformat()})
     assert r.status_code == 200

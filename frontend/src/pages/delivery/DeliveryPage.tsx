@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Button,
   Card,
   DatePicker,
@@ -13,6 +14,7 @@ import {
   Table,
   Tag,
   Tooltip,
+  Typography,
   Upload,
   type TableProps,
   type UploadFile,
@@ -22,6 +24,7 @@ import {
   CarOutlined,
   CheckOutlined,
   EyeOutlined,
+  PlusOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
@@ -95,6 +98,12 @@ export default function DeliveryPage() {
   const canMutate =
     user?.role === "admin" || user?.role === "warehouse" || user?.role === "driver";
   const canAssign = user?.role === "admin" || user?.role === "ops";
+  // `POST /deliveries/generate` requires ops|warehouse, and `admin` passes every
+  // role check server-side (`core/deps.py`). This is the only screen that can
+  // create the rows, so the gate has to match that endpoint — a driver must not
+  // be offered it.
+  const canGenerate =
+    user?.role === "admin" || user?.role === "ops" || user?.role === "warehouse";
 
   const [dateFilter, setDateFilter] = useState<string | undefined>();
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
@@ -169,6 +178,53 @@ export default function DeliveryPage() {
       if (detail?.id === id) {
         api.get<Delivery>(`/deliveries/${id}`).then((d) => setDetail(d)).catch(() => {});
       }
+    }
+  };
+
+  // Generate-deliveries modal. Same shape of step as Warehouse → Pick lists:
+  // choose a date, create the rows for it. Needed as well as the automatic
+  // creation at pick completion, because that only fires going forward — any
+  // order already picked before this existed still has no delivery row.
+  const [genOpen, setGenOpen] = useState(false);
+  const [genForm] = Form.useForm();
+
+  const handleGenerate = async () => {
+    let values: { delivery_date: unknown };
+    try {
+      values = await genForm.validateFields();
+    } catch {
+      return;
+    }
+    const deliveryDate = (values.delivery_date as { format: (f: string) => string }).format(
+      "YYYY-MM-DD",
+    );
+    // Report the REAL created count, not a blanket "generated".
+    //
+    // This is a backfill: the operator presses it believing some orders for that
+    // date are stranded. Zero is a legitimate answer and a meaningful one — it
+    // says the date is already covered — but a toast that says "Deliveries
+    // generated" either way would tell them the stuck order is fixed when
+    // nothing was created. `success: false` suppresses the fixed-string toast
+    // so the count can be reported after the response (see MutateOptions).
+    let created = 0;
+    const ok = await run(
+      async () => {
+        const res = await api.post<{ created_count: number }>("/deliveries/generate", {
+          delivery_date: deliveryDate,
+        });
+        created = res.created_count ?? 0;
+      },
+      { success: false },
+    );
+    if (ok) {
+      getMessage()?.success(
+        created > 0
+          ? t("pages.delivery.generateSuccess", { n: created })
+          : t("pages.delivery.generateNone"),
+      );
+      setGenOpen(false);
+      genForm.resetFields();
+      list.refresh();
     }
   };
 
@@ -390,7 +446,27 @@ export default function DeliveryPage() {
   ];
 
   return (
-    <Card title={t("pages.delivery.title")}>
+    <Card
+      title={t("pages.delivery.title")}
+      extra={
+        canGenerate && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setGenOpen(true)}>
+            {t("pages.delivery.generate")}
+          </Button>
+        )
+      }
+    >
+      {/* This screen is the only place a delivery row can be created, so an empty
+          table must say how it fills. Leaving it blank is exactly what made the
+          whole delivery leg look like a missing feature. */}
+      {!list.loading && list.items.length === 0 && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={t("pages.delivery.emptyHint")}
+        />
+      )}
       <Space wrap size="middle" style={{ marginBottom: 12 }}>
         <DatePicker
           placeholder={t("pages.delivery.filterDate")}
@@ -533,6 +609,28 @@ export default function DeliveryPage() {
           </Form.Item>
         </Form>
       </Drawer>
+
+      <Modal
+        title={t("pages.delivery.generateTitle")}
+        open={genOpen}
+        onCancel={() => setGenOpen(false)}
+        onOk={handleGenerate}
+        confirmLoading={mutateLoading}
+        okText={t("pages.delivery.generate")}
+      >
+        <Typography.Paragraph type="secondary">
+          {t("pages.delivery.generateHint")}
+        </Typography.Paragraph>
+        <Form form={genForm} layout="vertical">
+          <Form.Item
+            name="delivery_date"
+            label={t("pages.delivery.deliveryDate")}
+            rules={[{ required: true }]}
+          >
+            <DatePicker style={{ width: "100%" }} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </Card>
   );
 }

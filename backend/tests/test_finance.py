@@ -134,6 +134,17 @@ def _build_chain_to_picked(client, warehouse_headers, *, planned_qty=50.0, pick_
         json={"picked_quantity": pick_qty},
     )
     assert r.status_code == 200, r.text
+    # Picking the last line creates the Delivery row (see
+    # `picklists.pick_line` → `generate_deliveries`). Read it back so the
+    # downstream steps never have to call `/deliveries/generate`, which is now
+    # only a backfill and returns nothing for an already-created date.
+    r = client.get(
+        "/api/v1/deliveries", headers=warehouse_headers,
+        params={"date": dd.isoformat()},
+    )
+    assert r.status_code == 200, r.text
+    rows = r.json()["items"]
+    assert rows, "picking the last line should have created the delivery"
     return {
         "pick_list": pk,
         "order_id": order_id,
@@ -144,21 +155,18 @@ def _build_chain_to_picked(client, warehouse_headers, *, planned_qty=50.0, pick_
         "customer_id": customer_id,
         "picked_qty": pick_qty,
         "delivery_date": dd,
+        "delivery_id": rows[0]["id"],
     }
 
 
 def _complete_delivery(client, warehouse_headers, admin_headers, data):
-    """Generate + complete a delivery (delivered) for the chain's date.
+    """Complete the delivery the pick chain already created (delivered).
 
+    Picking the last line calls `generate_deliveries`, so the row exists by the
+    time we get here — `data["delivery_id"]` is read back in `_build_chain`.
     Returns the delivery dict.
     """
-    r = client.post(
-        "/api/v1/deliveries/generate", headers=admin_headers,
-        json={"delivery_date": data["delivery_date"].isoformat()},
-    )
-    assert r.status_code == 201, r.text
-    delivery = r.json()["created"][0]
-    delivery_id = delivery["id"]
+    delivery_id = data["delivery_id"]
     # Move to picked then out for delivery.
     client.post(f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
                 json={"status": "picked"})
