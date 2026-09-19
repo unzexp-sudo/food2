@@ -168,7 +168,10 @@ class Settings(BaseSettings):
     notify_enabled: bool = True
     # Internal WeCom group chat that receives "an order is waiting for review"
     # alerts. Empty means no push is sent — the in-app review queue remains the
-    # source of truth, so the order is never lost, just not announced.
+    # source of truth, so the order is never lost, just not announced. Empty is
+    # the ACCEPTED production state: the operator's own WeCom client surfaces the
+    # arrival, so this is not a misconfiguration to repair. See
+    # `wecom_ops_chat_id_is_set` for why the flag is still reported.
     wecom_ops_chat_id: str = ""
 
     @property
@@ -232,21 +235,23 @@ class Settings(BaseSettings):
         """True when the internal "an order is waiting for review" ping can go out.
 
         `intake.needs_review` is the ONE notification with no customer on it — it
-        is addressed to the ops group, not to a buyer — and it is the only thing
-        that announces a parked job. With `wecom_ops_chat_id` empty the handler
-        logs one line at INFO and returns: the job is still queued, so nothing is
-        lost, but nobody is told either.
+        is addressed to the ops group, not to a buyer. With `wecom_ops_chat_id`
+        empty the handler logs one line at INFO and returns: the job is still
+        queued, so nothing is lost, but nothing is pushed either. That mechanism
+        is unchanged and is pinned by `test_mandatory_review.py`.
 
-        That is a silent failure by construction. Every extraction stops for
-        review (`intake_require_human_review` defaults True), so the queue this
-        feeds fills on its own, and the only symptom is a list nobody looked at.
-        The handler's own docstring says as much — "without this the queue fills
-        up silently and orders sit unprocessed" — which is exactly what an unset
-        variable produces.
+        **Unset is the accepted production state, not a defect.** The operator
+        receives an arriving order through their own WeCom client, so no
+        server-side ops group is configured, and the in-app review list remains
+        the source of truth for what is parked. The banner therefore does not
+        list this — a warning that fires on a deliberate setting teaches the
+        reader to ignore the banner.
 
-        Reporting it here is the same move as `wecom_gateway_url_is_loopback`:
-        make the invisible configuration visible on the one endpoint that is
-        always read.
+        The field stays on `/api/health` on purpose, and that is the difference
+        between dropping an alarm and dropping the instrument: the server-side
+        ping really is off, and that fact should stay readable from outside. If
+        the client-side notification ever stops arriving, this is the field that
+        tells you the ERP was never covering for it.
         """
         return bool((self.wecom_ops_chat_id or "").strip())
 

@@ -373,8 +373,17 @@ Response:
 
 `intake_needs_review` is the only template with no customer on it: it goes to
 the internal ops group (`ERP_WECOM_OPS_CHAT_ID` → `WECOM_INTERNAL_OPS_CHAT_ID`)
-to say an extraction is parked. It still writes a `wecom_outbound_log` row, so
-it appears in the ERP's outbound log alongside the customer messages.
+to say an extraction is parked.
+
+**Leaving `ERP_WECOM_OPS_CHAT_ID` empty is the accepted production state**, not a
+misconfiguration: the operator's own WeCom client surfaces the arriving order, so
+no server-side ops group is configured, the in-app review list stays the source of
+truth, and `/api/health`'s `wecom_ops_chat_id_is_set` reads `false` by design.
+One consequence worth knowing when reading the outbound log: the handler returns
+*before* `notify()` when the chat id is empty, so no `wecom_outbound_log` row is
+written for this template either. The log shows `intake_needs_review` only when a
+push was actually attempted — a missing row here is expected, not evidence of a
+dropped message.
 
 ### The two outbound enums, and the four places they are written down
 

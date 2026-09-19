@@ -288,13 +288,20 @@ def test_a_real_parse_clears_the_fabricated_flag(tmp_path, monkeypatch):
 # The review ping is the one notification with no customer on it
 # ---------------------------------------------------------------------------
 #
-# Every extraction stops for review, so the parked-job queue fills on its own.
-# `intake.needs_review` is the only thing that announces it, and with
-# `WECOM_OPS_CHAT_ID` unset the handler logs one INFO line and returns — the job
-# is still queued, but nobody is told. That behaviour is pinned by
-# `test_mandatory_review.py::test_review_push_skipped_when_unconfigured`; what
-# these tests add is that the state is *visible from outside*, because a log
-# line nobody reads is indistinguishable from a feature that works.
+# `intake.needs_review` is the only thing that would announce a parked job to
+# WeCom, and with `WECOM_OPS_CHAT_ID` unset the handler logs one INFO line and
+# returns — the job is still queued, nothing is pushed, and (because the return
+# happens before `notify()`) no outbound-log row is written either. That
+# behaviour is pinned by
+# `test_mandatory_review.py::test_review_push_skipped_when_unconfigured`.
+#
+# Unset is the ACCEPTED production state, not a defect: the operator's own WeCom
+# client surfaces the arrival, and the in-app review list is the source of truth.
+# So the banner does not warn about it. What these tests add is that the state
+# stays *visible from outside* — dropping the alarm must not mean dropping the
+# instrument, because a log line nobody reads is indistinguishable from a feature
+# that works, and this field is what tells you the ERP was never covering for a
+# client-side notification that stopped arriving.
 
 
 def test_health_reports_whether_the_review_ping_can_go_out(client, monkeypatch):

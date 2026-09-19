@@ -33,8 +33,6 @@ const extra = {
       "This build was compiled without a WeCom gateway address, so every WeCom screen is calling a local address no user can reach. Set",
     loopbackGateway:
       "Customer notifications are being sent to the ERP's own container, so no customer is ever texted and nothing errors. Set",
-    noOpsChat:
-      "Nobody is told when an order is waiting for review, so parked orders sit unnoticed. Set",
     simulatedOcr:
       "Photos and scanned PDFs are not being read — the extractor returns demo lines instead. Set",
     defaultServiceKey:

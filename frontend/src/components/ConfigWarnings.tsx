@@ -14,7 +14,6 @@ import { WECOM_GATEWAY_URL_IS_UNCONFIGURED } from "../api/client";
 interface Health {
   notify_enabled?: boolean;
   wecom_gateway_url_is_loopback?: boolean;
-  wecom_ops_chat_id_is_set?: boolean;
   image_extraction_is_simulated?: boolean;
   service_key_is_default?: boolean;
   wecom_gateway_key_is_default?: boolean;
@@ -36,15 +35,21 @@ interface Health {
  *     notification into its own container. Nothing is ever delivered and
  *     nothing errors; the only symptom is "the customer says nobody texted
  *     them". This is the whole reason the field exists.
- *  2. `wecom_ops_chat_id_is_set` — every extraction stops for review, so the
- *     parked-job queue fills on its own, and this is the only thing that
- *     announces it. Unset, the queue is silent and orders sit unprocessed.
- *  3. `image_extraction_is_simulated` — a photo or scanned PDF is not read at
+ *  2. `image_extraction_is_simulated` — a photo or scanned PDF is not read at
  *     all; the extractor returns canned lines that happen to be real products.
- *  4. The two default-secret flags — accepted as valid credentials, committed
+ *  3. The two default-secret flags — accepted as valid credentials, committed
  *     to a public repo.
- *  5. `notify_enabled` off — the master switch, off on purpose perhaps, but
+ *  4. `notify_enabled` off — the master switch, off on purpose perhaps, but
  *     worth saying out loud rather than leaving as a silence.
+ *
+ * Deliberately NOT listed: `wecom_ops_chat_id_is_set`. It reads false in
+ * production and that is a decision, not a defect — the operator's own WeCom
+ * client already surfaces an arriving order, so no server-side ops group is
+ * configured. `/api/health` still reports the field, because "the server-side
+ * ping is off" should stay observable from outside; it is simply not something
+ * to announce above every page in the product. A banner that fires on a
+ * deliberate setting teaches the reader to ignore the banner, which costs more
+ * than the warning is worth.
  */
 const RULES: {
   isBad: (h: Health) => boolean;
@@ -62,11 +67,6 @@ const RULES: {
     isBad: (h) => h.wecom_gateway_url_is_loopback === true,
     env: "ERP_WECOM_GATEWAY_URL",
     i18n: "configWarnings.loopbackGateway",
-  },
-  {
-    isBad: (h) => h.wecom_ops_chat_id_is_set === false,
-    env: "ERP_WECOM_OPS_CHAT_ID",
-    i18n: "configWarnings.noOpsChat",
   },
   {
     isBad: (h) => h.image_extraction_is_simulated === true,
