@@ -30,12 +30,20 @@ Pick list generation:
 Picking:
   - line.picked_quantity set; status "picked" (full) / "short" (<planned).
   - List → "picking" on first pick, "picked" when all lines picked/short.
-  - When a pick list is fully picked: set its orders to "fulfilled" ONLY
-    when ALL their lines across ALL pick lists are picked.
   - When a pick list becomes "picked": generate the Delivery rows for that
     date (see `pick_line`). This is the only moment the picked quantities a
     delivery line is built from are known, and until it was wired here
     nothing in the product called `generate_deliveries` at all.
+
+    The ORDER is not advanced here. Picking leaves it at `consolidated`; it
+    reaches `fulfilled` only when a person completes the delivery (see
+    `warehouse/delivery.complete_delivery`). Picking proves the goods exist
+    to ship, not that they arrived, and treating the two as the same thing
+    made the delivery leg invisible: the order raced to `fulfilled` seconds
+    after the last line was scanned, so the timeline jumped
+    `consolidated → fulfilled`, "out for delivery" could never light up, and
+    the completion step that is supposed to be the human check had nothing
+    left to confirm.
 """
 from __future__ import annotations
 
@@ -366,13 +374,22 @@ def pick_line(
         ),
     )
 
-    # When a pick list is fully picked, mark its orders fulfilled ONLY when
-    # ALL their lines across pick lists are picked/short.
-    _maybe_fulfill_orders(db, pick_list)
-
-    # A fully picked list is the moment the goods physically exist to ship, and
-    # the only moment anything knows the picked quantities a delivery line is
-    # built from. Create the Delivery rows here.
+    # The order is deliberately NOT advanced here.
+    #
+    # It used to go straight to `fulfilled` the moment its last line was
+    # picked, on the reading that "fulfilled = the goods exist to ship". That
+    # reading collapses two different facts — stock is on the shelf, versus a
+    # customer has received it — and the order status is the only place the
+    # pipeline can express the second one. The visible damage: `fulfilled` is
+    # stage 5 and the delivery leg is stage 4, so the order skipped the very
+    # stage the goods were about to enter, "out for delivery" never lit, and
+    # `complete_delivery`'s delivered-quantities + POD step had nothing left
+    # to verify. The order now rests at `consolidated` and the delivery leg
+    # owns the rest of the journey.
+    #
+    # A fully picked list is still the moment the goods physically exist to
+    # ship, and the only moment anything knows the picked quantities a
+    # delivery line is built from. Create the Delivery rows here.
     #
     # Why here and not left to the operator: nothing in the product ever called
     # `generate_deliveries`. The endpoint existed and every *transition*
@@ -392,38 +409,11 @@ def pick_line(
     return line
 
 
-def _maybe_fulfill_orders(db: Session, pick_list: PickList) -> None:
-    """For each order represented on this pick list, set status to
-    'fulfilled' only if all of its order lines have a pick line with status
-    picked|short across all pick lists. Otherwise leave the order as-is
-    (consolidated).
-    """
-    # Resolve the order_id for each pick line via the OrderLine.
-    order_line_ids = {ln.order_line_id for ln in pick_list.lines if ln.order_line_id}
-    if not order_line_ids:
-        return
-    order_ids: set[str] = set()
-    for ol in db.query(OrderLine).filter(OrderLine.id.in_(order_line_ids)).all():
-        order_ids.add(ol.order_id)
-    for order_id in order_ids:
-        order = db.get(Order, order_id)
-        if order is None or order.status not in ("consolidated", "fulfilled"):
-            continue
-        # All order lines must have a picked/short pick line.
-        ol_ids = [
-            ol.id for ol in db.query(OrderLine).filter(OrderLine.order_id == order_id).all()
-        ]
-        if not ol_ids:
-            continue
-        picked_lines = (
-            db.query(PickLine)
-            .filter(
-                PickLine.order_line_id.in_(ol_ids),
-                PickLine.status.in_(("picked", "short")),
-            )
-            .all()
-        )
-        picked_ol_ids = {pl.order_line_id for pl in picked_lines}
-        if set(ol_ids).issubset(picked_ol_ids):
-            if order.status != "fulfilled":
-                order.status = "fulfilled"
+# `_maybe_fulfill_orders` used to live here: on the last pick it walked every
+# order on the list and set it to `fulfilled`. It was removed on purpose — it
+# is what made a picked order jump the "out for delivery" stage. An order
+# reaches `fulfilled` from `warehouse/delivery.complete_delivery` only, when a
+# person records what was actually handed over and attaches the POD. If you are
+# tempted to bring it back to "unstick" an order, note that it would also
+# re-create the bug it was deleted for, and that the unstick belongs on the
+# delivery (`POST /deliveries/{id}/status` then `/complete`).

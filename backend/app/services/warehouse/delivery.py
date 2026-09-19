@@ -24,6 +24,18 @@ Complete:
   - delivered_at = now.
   - Audit-log.
   - Order status → "fulfilled" when delivered or partial.
+    THIS IS THE ONLY PLACE AN ORDER REACHES `fulfilled`. It is a human act —
+    someone records what was actually handed over and attaches the POD — and
+    it is the last step of the delivery leg (scheduled → picked →
+    out_for_delivery → delivered). Picking no longer advances the order, so
+    the leg is not optional: an order that is never dispatched stays at
+    `consolidated`, and the timeline shows "out for delivery" pending instead
+    of skipping it.
+  - A `failed` delivery leaves the order at `consolidated` — nothing arrived,
+    so `fulfilled` would be a lie. Recover by setting the delivery back to
+    `picked` (`POST /deliveries/{id}/status`) and completing it again; the
+    status endpoint does not restrict the source status, and
+    `generate_deliveries` will not create a second row for the date.
   - Emit "delivery.completed" (finance auto-invoices).
 """
 from __future__ import annotations
@@ -353,6 +365,13 @@ def complete_delivery(
     db.flush()
 
     # Order status → fulfilled when delivered or partial.
+    #
+    # The order's `fulfilled` is set here and nowhere else. It means "a person
+    # confirmed the goods reached the customer", which is why it is gated on
+    # this human step and not on the pick list: picking only proves the goods
+    # existed to ship. Setting it at pick time put the order at stage 5 before
+    # the delivery leg (stage 4) had run, so the timeline skipped "out for
+    # delivery" entirely.
     order = db.get(Order, delivery.order_id) if delivery.order_id else None
     order_before = None
     if order is not None:

@@ -187,6 +187,79 @@ def test_picking_last_line_creates_delivery(client, warehouse_headers):
     assert d["driver_id"] is None, "created unassigned; a human assigns the driver"
 
 
+def test_picking_does_not_fulfil_the_order(client, warehouse_headers, ops_headers):
+    """Picking leaves the order at `consolidated`; only a completed delivery fulfils it.
+
+    Regression test for the reported bug. `picklists.pick_line` used to call
+    `_maybe_fulfill_orders`, so the last pick set the order straight to
+    `fulfilled`. `fulfilled` is stage 5 of `OrderTimeline` and the delivery leg
+    is stage 4, so the order skipped the stage its goods were about to enter:
+    "out for delivery" never lit, and `complete_delivery` — the delivered
+    quantities and POD a person enters — had nothing left to confirm. This
+    walks the whole leg in order and fails at whichever step re-introduces the
+    skip.
+    """
+    data = _build_chain_to_picked(client, warehouse_headers)
+    delivery_id = data["delivery_id"]
+    order_id = data["order_id"]
+
+    def _order_status() -> str:
+        from app.core.database import SessionLocal
+        from app.models import Order
+        with SessionLocal() as db:
+            return db.get(Order, order_id).status
+
+    def _delivery() -> dict:
+        r = client.get(f"/api/v1/deliveries/{delivery_id}", headers=warehouse_headers)
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    # 1. Picked. The delivery row exists; the order has not moved past
+    #    `consolidated`.
+    assert _delivery()["status"] == "scheduled"
+    assert _order_status() == "consolidated", (
+        "picking must not fulfil the order — it skips the delivery leg"
+    )
+
+    # 2. Dispatch. `out_for_delivery` is a Delivery status: it moves the
+    #    delivery and must leave the order alone.
+    for step in ("picked", "out_for_delivery"):
+        r = client.post(
+            f"/api/v1/deliveries/{delivery_id}/status", headers=warehouse_headers,
+            json={"status": step},
+        )
+        assert r.status_code == 200, r.text
+    assert _delivery()["status"] == "out_for_delivery"
+    assert _order_status() == "consolidated", (
+        "out for delivery is a Delivery status; it must not fulfil the order"
+    )
+
+    # 3. The order payload the timeline renders actually carries the dispatch —
+    #    without it the timeline has no way to draw stage 4.
+    order = client.get(f"/api/v1/orders/{order_id}", headers=ops_headers).json()
+    assert order["delivery"] is not None
+    assert order["delivery"]["status"] == "out_for_delivery"
+    assert order["delivery"]["out_at"] is not None
+
+    # 4. The human step: someone records what was handed over. Only now does
+    #    the order reach `fulfilled`. (`invoiced` is accepted because the
+    #    finance handler auto-invoices on `delivery.completed`.)
+    d = _delivery()
+    r = client.post(
+        f"/api/v1/deliveries/{delivery_id}/complete", headers=warehouse_headers,
+        json={
+            "lines": [
+                {"delivery_line_id": ln["id"], "delivered_quantity": ln["quantity"]}
+                for ln in d["lines"]
+            ],
+            "received_by": "Test receiver",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "delivered"
+    assert _order_status() in ("fulfilled", "invoiced")
+
+
 def test_repicking_does_not_duplicate_the_delivery(client, warehouse_headers):
     """`generate_deliveries` skips orders that already have a row for the date.
 

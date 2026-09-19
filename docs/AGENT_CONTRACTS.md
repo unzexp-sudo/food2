@@ -253,6 +253,10 @@ GET  /inbound-receipts?po_id=
 GET  /pick-lists?delivery_date=&status=
 GET  /pick-lists/{id}
 POST /pick-lists/{id}/lines/{line_id}/pick   {picked_quantity}   R: warehouse/admin
+       → picking the last line creates the order's Delivery row (status `scheduled`).
+         It does NOT advance the order: the order stays `consolidated` until the delivery
+         is completed. Dispatch and completion are the delivery endpoints below — an
+         order that is never dispatched never becomes `fulfilled`.
 POST /pick-lists/generate       {delivery_date}  manual regen    R: warehouse/admin
 GET  /inventory?product_id=     → movements ledger  R: warehouse/admin
 POST /inventory/loss            {product_id, quantity, reason}   R: warehouse/admin
@@ -277,10 +281,17 @@ POST /deliveries/{id}/complete  {lines: [{delivery_line_id, delivered_quantity}]
 ```
 
 **Order vs Delivery status.** `out_for_delivery` is a *Delivery* status, not an Order
-status. An order is marked `fulfilled` when its last pick line is picked — i.e. when the
-goods exist to ship, not when they arrive. The delivery leg (scheduled → picked →
-out_for_delivery → delivered) then runs alongside it, and `OrderTimeline` renders it in
-its own slot rather than as an order status.
+status. An order sits at `consolidated` from the moment it is consolidated until a person
+completes its delivery: **`fulfilled` means the goods reached the customer**, and
+`POST /deliveries/{id}/complete` — the delivered quantities and the POD a person enters —
+is the only thing that sets it. Picking does not advance the order. It used to (the last
+pick set `fulfilled` outright, on the reading that the goods now existed to ship), and that
+made the delivery leg invisible: `fulfilled` is stage 5 of `OrderTimeline` and the delivery
+leg is stage 4, so the order skipped the stage its goods were about to enter, "out for
+delivery" could never light up, and the completion step that is meant to be the human check
+had nothing left to confirm. The leg (scheduled → picked → out_for_delivery → delivered)
+therefore runs *before* `fulfilled`, and `OrderTimeline` renders it in its own slot rather
+than as an order status.
 
 ### finance (finance agent)
 ```

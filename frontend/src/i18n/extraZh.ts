@@ -94,6 +94,7 @@ const extraZh = {
         needsClarification: "需澄清",
         rejected: "此订单已被拒绝，不会再有后续处理。",
         noDeliveryRecord: "该订单没有配送记录。",
+        notDispatched: "配送单 {{number}} 尚未发车。",
       },
     },
     intake: {

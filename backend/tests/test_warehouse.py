@@ -309,12 +309,21 @@ def test_pick_list_generation_and_pick_full(client, warehouse_headers, admin_hea
     assert updated["status"] == "picked"
     assert all(ln["status"] == "picked" for ln in updated["lines"])
 
-    # The order should now be fulfilled.
+    # The order must NOT be fulfilled by picking.
+    #
+    # This assertion used to read `== "fulfilled"`, which encoded the flow the
+    # reported bug came from: the last pick set the order to stage 5 while the
+    # delivery leg is stage 4, so `OrderTimeline` jumped `consolidated ->
+    # fulfilled` and "out for delivery" never lit. Picking proves the goods
+    # exist to ship; only a completed delivery (delivered quantities + POD,
+    # entered by a person) fulfils the order. The full leg — dispatch, then
+    # complete — is walked in `test_delivery.py::
+    # test_picking_does_not_fulfil_the_order`.
     from app.core.database import SessionLocal
     from app.models import Order
     with SessionLocal() as db:
         order = db.get(Order, data["order"].id)
-        assert order.status == "fulfilled"
+        assert order.status == "consolidated"
 
 
 def test_pick_list_short_line_marks_short(client, warehouse_headers):

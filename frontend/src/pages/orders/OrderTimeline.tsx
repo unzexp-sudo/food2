@@ -121,6 +121,17 @@ export default function OrderTimeline({ order }: { order: OrderTimelineData }) {
     const showNoDeliveryRecord =
       isDeliveryStage && !delivery && current > DELIVERY_INDEX;
 
+    // The delivery row exists but the goods have not left the depot. An order
+    // now rests at `consolidated` from the last pick until someone dispatches
+    // its delivery, so this is the normal state right after picking — and a
+    // grey dot on its own gives the operator nothing to act on. Naming the
+    // delivery says the leg has started and the next move is on the Delivery
+    // screen, which is where the dispatch buttons live.
+    const showNotDispatched =
+      isDeliveryStage &&
+      !!delivery &&
+      (delivery.status === "scheduled" || delivery.status === "picked");
+
     return {
       color: COLOR[state],
       children: (
@@ -144,6 +155,13 @@ export default function OrderTimeline({ order }: { order: OrderTimelineData }) {
           {showNoDeliveryRecord && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {t("pages.orders.orderTimeline.noDeliveryRecord")}
+            </Typography.Text>
+          )}
+          {showNotDispatched && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {t("pages.orders.orderTimeline.notDispatched", {
+                number: delivery?.delivery_number ?? "",
+              })}
             </Typography.Text>
           )}
         </Space>

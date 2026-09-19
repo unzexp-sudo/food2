@@ -109,6 +109,7 @@ const extra = {
         needsClarification: "Needs clarification",
         rejected: "This order was rejected. Nothing further will happen to it.",
         noDeliveryRecord: "No delivery was recorded for this order.",
+        notDispatched: "Delivery {{number}} has not been dispatched yet.",
       },
     },
     intake: {
