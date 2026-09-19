@@ -123,6 +123,20 @@ class Settings(BaseSettings):
     # Seconds allowed for one vision read. A dense table on a large photo can
     # take well past the 120s the OCR endpoint needs.
     vision_ocr_timeout: float = 180.0
+    # When the OCR endpoint answers a page with a cropped figure instead of
+    # text, re-read THAT page with the vision model instead of giving up.
+    #
+    # This is the switch that matters, and it is on by default, because
+    # `image_ocr_provider` alone would force a choice between two bad options:
+    # "mistral" leaves dense tables unread, while "pixtral" forces every photo
+    # through the slower, pricier, score-less vision model — including the
+    # simple ones /ocr already reads well. The rescue only fires on a page that
+    # would otherwise produce zero lines, so the fast path stays fast and the
+    # failing path gets a second chance.
+    #
+    # Off means: a figure-only page is flagged for human transcription as it
+    # was before. Nothing auto-approves either way.
+    vision_fallback_enabled: bool = True
 
     # --- OCR quality-assurance gates ------------------------------------------
     # A per-field confidence below this is treated as a hard flag (the field is

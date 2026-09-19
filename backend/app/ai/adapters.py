@@ -1152,12 +1152,36 @@ class MistralOcrExtractor:
             # below already marks the document for review and names the reason,
             # so the reviewer is told to transcribe instead of being handed a
             # partly-invented order.
+            #
+            # Dropping the lines is the safe half. The useful half is re-reading
+            # the page — see _vision_rescue — because "we noticed the page is
+            # unreadable" does not put 14 rows back on the order.
             if figures and lines and not _ORDER_QUANTITY_HINT_RE.search(text):
                 notes.append(
                     f"table returned as {figures} figure(s) instead of text — "
                     f"discarding {len(lines)} header-only line(s)"
                 )
                 lines = []
+                rescued = self._vision_rescue(
+                    source_type=source_type,
+                    file_path=file_path,
+                    original_filename=original_filename,
+                    figures=figures,
+                )
+                if rescued is not None:
+                    if rescued.lines:
+                        # Success: the rescue owns the result, but keep the OCR
+                        # trail in front of it so the reviewer can see WHY the
+                        # vision model was asked at all.
+                        rescued.parser_notes = "; ".join(
+                            [n for n in notes if n] + [rescued.parser_notes]
+                        ).strip("; ")
+                        return rescued
+                    notes.append(
+                        f"vision re-read found no lines ({rescued.parser_notes})"
+                    )
+                else:
+                    notes.append("vision re-read was not available")
 
         if confidence is not None:
             for ln in lines:
@@ -1190,6 +1214,49 @@ class MistralOcrExtractor:
             result.parser_notes = (result.parser_notes + "; " + extra).strip("; ")
             result.requires_human_review = True
         return result
+
+    def _vision_rescue(
+        self,
+        *,
+        source_type: str,
+        file_path: str | None,
+        original_filename: str | None,
+        figures: int,
+    ) -> ExtractionResult | None:
+        """Re-read a page the OCR endpoint answered with a cropped figure.
+
+        Returns None when no re-read was possible, so the caller keeps the safe
+        empty-and-flag outcome rather than gaining a new way to fail.
+
+        Only a photograph is rescued. A PDF is deliberately excluded: the vision
+        extractor hands scanned PDFs straight back to this class, so rescuing one
+        here would recurse.
+        """
+        if not settings.vision_fallback_enabled:
+            return None
+        if source_type != "image" or not file_path:
+            return None
+        # The original lives in the database; disk is a best-effort cache, so a
+        # redeployed container may not have it. No file means no re-read.
+        if not Path(file_path).exists():
+            return None
+        try:
+            return VisionTableExtractor().extract(
+                source_type=source_type,
+                file_path=file_path,
+                original_filename=original_filename,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # The rescue is a bonus, never a dependency. If the vision call is
+            # unconfigured, refused, times out or is not licensed for the model,
+            # the document must still land in review — exactly where it landed
+            # before the rescue existed. Swallowing here is what keeps a vision
+            # outage from becoming an intake outage.
+            logger.error(
+                "vision re-read failed after %d figure(s) on %s: %s",
+                figures, original_filename or file_path, exc,
+            )
+            return None
 
     def _ocr(self, chunk: dict) -> tuple[str, float | None, float | None, int, int, str]:
         """POST one document to Mistral.

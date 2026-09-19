@@ -22,7 +22,11 @@ import httpx
 import pytest
 
 from app.ai import adapters
-from app.ai.adapters import VisionTableExtractor, get_extractor
+from app.ai.adapters import (
+    MistralOcrExtractor,
+    VisionTableExtractor,
+    get_extractor,
+)
 from app.core.config import settings
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -349,3 +353,221 @@ def test_a_missing_key_is_refused_rather_than_falling_back_to_mock(tmp_path, mon
         VisionTableExtractor().extract(
             source_type="image", file_path=_img(tmp_path), original_filename="order.png"
         )
+
+
+# --- the automatic rescue -----------------------------------------------------
+#
+# The vision extractor is switched on by `image_ocr_provider=pixtral`, but that
+# switch alone leaves a choice between two bad defaults: "mistral" loses dense
+# tables, "pixtral" forces EVERY photo through the slower, pricier, score-less
+# model. So the OCR path rescues itself instead — it re-reads only the page that
+# came back as a figure. These tests pin that the rescue fires on the pages that
+# need it, stays silent on the ones that do not, and can never turn an intake
+# failure into an intake outage.
+
+# The header block of the real 14-row order that shipped as five lines.
+FIGURE_ONLY_MARKDOWN = (
+    "广东崇元绿色食品有限公司\n\n"
+    "采购单位: 广东来赫生餐饮有限公司\n"
+    "打印时间: 2026-09-02 20:49:01\n"
+    "任务数: 14\n\n"
+    "tbl-0.md"
+)
+
+
+def _ocr_page(markdown: str, figures: int = 0) -> dict:
+    return {
+        "pages": [{
+            "index": 0,
+            "markdown": markdown,
+            "images": [{"id": f"img-{i}.jpeg"} for i in range(figures)],
+        }],
+        "model": "mistral-ocr-latest",
+        "usage_info": {"pages_processed": 1},
+    }
+
+
+@pytest.fixture
+def rescue_on(monkeypatch):
+    """OCR provider, with the rescue armed. The default in production."""
+    monkeypatch.setattr(settings, "ai_provider", "mistral")
+    monkeypatch.setattr(settings, "image_ocr_provider", "mistral")
+    monkeypatch.setattr(settings, "mistral_api_key", "test-key")
+    monkeypatch.setattr(settings, "vision_fallback_enabled", True)
+
+
+def _capture_both(monkeypatch, ocr_payload: dict, chat_payload: dict) -> list[dict]:
+    """Route faked POSTs by URL: /ocr gets one answer, chat gets the other."""
+    calls: list[dict] = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append({"url": url, "json": json})
+        return _FakeResponse(
+            chat_payload if "chat/completions" in url else ocr_payload
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    return calls
+
+
+def test_a_figure_only_page_is_re_read_and_the_rows_come_back(
+    tmp_path, monkeypatch, rescue_on
+):
+    """The whole point of the rescue: 14 rows lost to a cropped figure should
+    come back as rows, not as a note telling someone to transcribe them."""
+    calls = _capture_both(
+        monkeypatch,
+        _ocr_page(FIGURE_ONLY_MARKDOWN, figures=1),
+        _reply({"lines": [
+            {"line_no": 1, "product_name": "土豆", "total_quantity": 50, "unit": "斤"},
+            {"line_no": 2, "product_name": "大白菜", "total_quantity": 30, "unit": "斤"},
+        ]}),
+    )
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=_img(tmp_path), original_filename="order.png"
+    )
+
+    assert [(l.product_name, l.quantity) for l in result.lines] == [
+        ("土豆", 50.0),
+        ("大白菜", 30.0),
+    ]
+    # Both reads happened, and the reviewer can see why the second was needed.
+    assert any("/ocr" in c["url"] for c in calls)
+    assert any("chat/completions" in c["url"] for c in calls)
+    assert "figure" in result.parser_notes
+    # 任务数 was the header field the old code emitted as a real product.
+    assert "任务数" not in [l.product_name for l in result.lines]
+
+
+def test_the_rescue_does_not_fire_when_the_ocr_read_real_quantities(
+    tmp_path, monkeypatch, rescue_on
+):
+    """A photo can carry a stamp or logo figure alongside a table that WAS read.
+    Rescuing that would pay for a vision call to re-read a page we already have
+    — and would replace confident, scored lines with unscored ones."""
+    calls = _capture_both(
+        monkeypatch,
+        _ocr_page("土豆 50斤\n大白菜 30斤", figures=2),
+        _reply({"lines": []}),
+    )
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=_img(tmp_path), original_filename="note.png"
+    )
+
+    assert [(l.product_name, l.quantity) for l in result.lines] == [
+        ("土豆", 50.0),
+        ("大白菜", 30.0),
+    ]
+    assert not any("chat/completions" in c["url"] for c in calls)
+
+
+def test_the_rescue_stays_off_when_it_is_switched_off(tmp_path, monkeypatch, rescue_on):
+    """`vision_fallback_enabled=false` must mean exactly what it said before the
+    rescue existed: flag the page, let a human transcribe it."""
+    monkeypatch.setattr(settings, "vision_fallback_enabled", False)
+    calls = _capture_both(
+        monkeypatch,
+        _ocr_page(FIGURE_ONLY_MARKDOWN, figures=1),
+        _reply({"lines": [{"product_name": "土豆", "total_quantity": 50}]}),
+    )
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=_img(tmp_path), original_filename="order.png"
+    )
+
+    assert result.lines == []
+    assert result.requires_human_review is True
+    assert not any("chat/completions" in c["url"] for c in calls)
+
+
+def test_a_pdf_is_never_rescued(tmp_path, monkeypatch, rescue_on):
+    """Recursion guard. The vision extractor hands a scanned PDF straight back to
+    MistralOcrExtractor, so rescuing a PDF here would loop forever."""
+    path = tmp_path / "scan.pdf"
+    path.write_bytes(PDF_BYTES)
+    # No text layer, so this really is a scan and does reach the OCR path —
+    # which is the only place the rescue could fire from.
+    monkeypatch.setattr(
+        adapters, "parse_pdf_lines", lambda p: ([], "scanned_pdf_no_text")
+    )
+    calls = _capture_both(
+        monkeypatch,
+        _ocr_page(FIGURE_ONLY_MARKDOWN, figures=1),
+        _reply({"lines": [{"product_name": "土豆", "total_quantity": 50}]}),
+    )
+
+    result = MistralOcrExtractor().extract(
+        source_type="pdf", file_path=str(path), original_filename="scan.pdf"
+    )
+
+    assert not any("chat/completions" in c["url"] for c in calls)
+    assert result.lines == []
+    assert result.requires_human_review is True
+
+
+def test_a_failed_vision_call_leaves_the_document_flagged_not_broken(
+    tmp_path, monkeypatch, rescue_on
+):
+    """The rescue is a bonus, never a dependency. An unlicensed model, a timeout
+    or a 401 must degrade to the pre-rescue outcome — flagged for review — and
+    must never raise into the intake pipeline."""
+    calls: list[dict] = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append({"url": url})
+        if "chat/completions" in url:
+            raise httpx.HTTPStatusError("HTTP 401", request=None, response=None)
+        return _FakeResponse(_ocr_page(FIGURE_ONLY_MARKDOWN, figures=1))
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=_img(tmp_path), original_filename="order.png"
+    )
+
+    assert result.lines == []
+    assert result.requires_human_review is True
+    assert "not available" in result.parser_notes
+
+
+def test_a_rescue_that_reads_nothing_is_still_flagged(tmp_path, monkeypatch, rescue_on):
+    """A vision model that finds no rows is not an empty order — same rule as the
+    OCR path. It must say so and stay in review."""
+    _capture_both(
+        monkeypatch,
+        _ocr_page(FIGURE_ONLY_MARKDOWN, figures=1),
+        _reply({"lines": []}),
+    )
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=_img(tmp_path), original_filename="order.png"
+    )
+
+    assert result.lines == []
+    assert result.requires_human_review is True
+    assert "no lines" in result.parser_notes
+
+
+def test_a_page_missing_from_disk_is_not_rescued(tmp_path, monkeypatch, rescue_on):
+    """Disk is a best-effort cache; the original lives in the database. If the
+    bytes are gone there is nothing to hand the vision model, and that must be
+    answered with None rather than an exception.
+
+    Exercised on the guard directly: the OCR read itself opens the file first, so
+    a genuinely vanished file never reaches the rescue in the normal flow.
+    """
+    calls = _capture_both(
+        monkeypatch,
+        _ocr_page(FIGURE_ONLY_MARKDOWN, figures=1),
+        _reply({"lines": [{"product_name": "土豆", "total_quantity": 50}]}),
+    )
+
+    assert MistralOcrExtractor()._vision_rescue(
+        source_type="image",
+        file_path=str(tmp_path / "gone.png"),
+        original_filename="order.png",
+        figures=1,
+    ) is None
+    assert not any("chat/completions" in c["url"] for c in calls)

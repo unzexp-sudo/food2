@@ -199,6 +199,11 @@ def health():
         # behave differently enough that "which one is running" is the first
         # thing to check when an extraction looks wrong.
         "image_ocr_provider": settings.image_ocr_provider,
+        # Whether a page the OCR answered with a cropped figure gets re-read by
+        # the vision model. This is the switch that actually fixes a dense table,
+        # so it has to be visible: "false" means a figure-only page is flagged
+        # for human transcription and nothing more.
+        "vision_fallback_enabled": settings.vision_fallback_enabled,
     }
 
 

@@ -67,6 +67,17 @@ def mistral_on(monkeypatch):
     monkeypatch.setattr(settings, "mistral_api_key", "test-key")
 
 
+@pytest.fixture(autouse=True)
+def vision_rescue_off(monkeypatch):
+    """Keep this file's OCR assertions about the OCR alone.
+
+    The figure-only rescue is on by default, and it would fire inside the
+    figure-guard tests below — sending them to the vision endpoint, which these
+    tests never stubbed. It is tested on its own in test_vision_table_ocr.py.
+    """
+    monkeypatch.setattr(settings, "vision_fallback_enabled", False)
+
+
 def _capture(monkeypatch, payload: dict, status_code: int = 200) -> list[dict]:
     """Patch httpx.post, recording every request. Returns the call log."""
     calls: list[dict] = []
