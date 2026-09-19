@@ -202,5 +202,90 @@ def test_parser_handles_garbage_gracefully(bad):
     # Either variant is "unknown" with no lines, OR — for "任务数:0" —
     # variant is "A" with no lines. Either way: no crash, no exception,
     # and the result is a `StructuredOrder`.
-    assert order.variant in ("A", "B", "C", "unknown")
+    assert order.variant in ("A", "B", "C", "D", "E", "unknown")
     assert order.lines == []
+
+
+# ---------------------------------------------------------------------------
+# Sample E — variant E, 16 per-customer rows from a real 广东尝元 PDF
+# ---------------------------------------------------------------------------
+def test_sample_e_parses_as_variant_e_with_16_lines():
+    text = _read("sample_e")
+    order = parse_supplier_order(text)
+    assert order.variant == "E", f"expected variant E, got {order.variant}"
+    assert len(order.lines) == 16, (
+        f"expected 16 lines (PDF image shows 16 ordered rows). "
+        f"Got {len(order.lines)}."
+    )
+    # The 订单数量 column is what the operator needs. Assert against the
+    # values taken from the original PDF so a future regression is loud.
+    expected_qty = [
+        (1, "炸豆干", 10.0, "斤", "俱乐部-员工餐"),
+        (2, "水豆腐", 12.0, "板", "番禺物业-员工餐"),
+        (3, "山水豆腐", 1.0, "盒", "月子中心（医院店）"),
+        (4, "水豆腐（可油炸）", 1.0, "板", "俱乐部-味部"),
+        (5, "水豆腐（可油炸）", 1.0, "板", "俱乐部-中厨"),
+        (6, "炸豆腐", 25.0, "斤", "护老公寓"),
+        (7, "水豆腐", 7.0, "板", "护老公寓"),
+        (8, "豆腐干", 2.0, "斤", "国际公寓_西厨"),
+        (9, "白豆干", 20.0, "斤", "祈福医院-员工餐"),
+        (10, "水豆腐", 3.0, "板", "祈福医院-病餐"),
+        (11, "卤水香干", 3.0, "斤", "祈福医院-病餐"),
+        (12, "炸豆腐", 4.0, "斤", "祈福医院-专家餐"),
+        (13, "日本豆腐", 40.0, "条", "湖景便利店"),
+        (14, "日本豆腐", 40.0, "条", "俱乐部-西厨"),
+        (15, "炸豆腐", 1.0, "斤", "祈福医院-专家餐"),
+        (16, "攸县香干", 2.0, "斤", "俱乐部-中厨"),
+    ]
+    actual = [
+        (ln.line_no, ln.product_name, ln.total_quantity, ln.total_unit,
+         ln.breakdowns[0].customer_name if ln.breakdowns else None)
+        for ln in order.lines
+    ]
+    assert actual == expected_qty
+
+
+def test_sample_e_joins_wrapped_lines_and_attaches_model_notes():
+    """The PDF's text layer splits some 餐别 across two text lines and
+    drops the 型号 column onto its own text line. Both wraps must be
+    repaired before column-parsing, otherwise rows 2/3/9/12/15 misalign."""
+    text = _read("sample_e")
+    order = parse_supplier_order(text)
+    # Row 2 餐别 wraps as "2 番禺物业-员工" + "餐 水豆腐 ..."
+    row2 = order.lines[1]
+    assert row2.breakdowns[0].customer_name == "番禺物业-员工餐"
+    # Row 3 餐别 wraps as "3 月子中心（医" + "院店） 山水豆腐 ..."
+    row3 = order.lines[2]
+    assert row3.breakdowns[0].customer_name == "月子中心（医院店）"
+    # Row 6 attaches a 型号 trailing line ("7548 约6斤/板")
+    row6 = order.lines[5]
+    assert row6.product_name == "炸豆腐"
+    assert "7548" in (row6.notes or "")
+    assert "约6斤/板" in (row6.notes or "")
+    # And the encoding column ("132014002003000") lands in extras, not in notes
+    assert row6.extra.get("encoding") == "132014002003000"
+    assert row6.extra.get("row_total") == 87.5
+
+
+def test_sample_e_drops_header_and_footer_lines():
+    """The PDF's title block (5 lines) and footer (合计, 供应商确认, 制单人) must
+    not become order lines. Before the fix they did — producing 40 lines of
+    garbage instead of 16."""
+    text = _read("sample_e")
+    order = parse_supplier_order(text)
+    names = [ln.product_name for ln in order.lines]
+    for s in ("广州市祈福生鲜贸易有限公司", "采购订单", "序号", "合计:", "供应商确认",
+             "制单人", "POORD"):
+        assert not any(s in n for n in names if n), (
+            f"page furniture leaked into product lines: {s!r}"
+        )
+
+
+def test_variant_e_keeps_other_variants_untouched():
+    """detect_variant must classify A/B/C correctly even when the new E
+    detector is checked first."""
+    from app.ai.structured_parser import detect_variant
+    assert detect_variant(_read("sample_a")) == "A"
+    assert detect_variant(_read("sample_b")) == "B"
+    assert detect_variant(_read("sample_c")) == "C"
+    assert detect_variant(_read("sample_e")) == "E"

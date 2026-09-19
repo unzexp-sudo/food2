@@ -266,6 +266,10 @@ def detect_variant(text: str) -> str:
         return "C"
     if _B_BRACKET_ROW.search(text):
         return "B"
+    # Variant E has its own column-header trio; detect it BEFORE variant A so a
+    # PDF that lacks "采购单位" / "明细" / "任务数" is still classified correctly.
+    if all(t in text for t in ("餐别", "物料名称", "订单数量")):
+        return "E"
     if "采购单位" in text or "明细" in text or "任务数" in text:
         return "A"
     return "unknown"
@@ -712,6 +716,198 @@ def _parse_variant_c(text: str) -> StructuredOrder:
 
 
 # ---------------------------------------------------------------------------
+# Variant E — per-customer-per-row supplier orders
+# ---------------------------------------------------------------------------
+#
+# Observed on a 广东尝元 PDF (extracted verbatim from the /ocr-less text layer
+# via pypdf). The shape is genuinely different from A/B/C/D: each row carries
+# the 餐别 (sub-customer) INLINE with the product, the columns are space-
+# separated (no pipes), and the {合计}{编码} pair is glued without a separator
+# in the text layer ("48" + "132014002003000" → "48132014002003000_"). The 型号
+# column often lands on its own text line, and a 餐别 can wrap onto the next
+# text line. So one PDF row maps to 2-3 pypdf lines.
+#
+# Detected by the column-header trio "餐别 / 物料名称 / 订单数量" — more durable
+# than the supplier name (other suppliers may adopt the same layout).
+
+
+_E_HEAD_TOKENS = ("餐别", "物料名称", "订单数量")
+# A row separator in the joined text: 1-2 digits + whitespace.
+_E_LINE_NUM_RE = re.compile(r"^\s*(\d{1,2})\s")
+# A 型号 trailing line: 4 digits + whitespace (a model code, not a row number).
+_E_MODEL_RE = re.compile(r"^\s*\d{4}\s")
+# The {合计}{编码} glued token: decimal + a 15-digit encoding starting with "1".
+_E_TOTAL_ENCODING_RE = re.compile(r"^(\d+(?:\.\d+)?)(1\d{14})_?$")
+# Anything that marks the end of the body block (footer lines are skipped).
+_E_FOOTER_RE = re.compile(r"^(合计[:：]|供应商确认|收货确认|制单人[:：]|打印时间[:：])")
+
+
+def _parse_variant_e(text: str) -> StructuredOrder:
+    raw = [ln.strip() for ln in text.splitlines()]
+
+    # Body begins AFTER the column-header line. We don't trust the order of
+    # fields inside that line — only that all three header tokens appear.
+    body_start = 0
+    for i, ln in enumerate(raw):
+        if all(t in ln for t in _E_HEAD_TOKENS):
+            body_start = i + 1
+            break
+
+    body_end = len(raw)
+    for i in range(body_start, len(raw)):
+        if _E_FOOTER_RE.match(raw[i]):
+            body_end = i
+            break
+
+    body = raw[body_start:body_end]
+
+    # Join continuation lines and 型号 trailing lines onto the current row.
+    # A row starts with 1-2 digits; anything else without a leading 4-digit
+    # model code is treated as a continuation of the previous row.
+    rows: list[str] = []
+    cur: list[str] = []
+    for ln in body:
+        if not ln:
+            continue
+        if _E_LINE_NUM_RE.match(ln):
+            if cur:
+                rows.append(" ".join(cur))
+            cur = [ln]
+        elif _E_MODEL_RE.match(ln) and cur:
+            cur.append(ln)
+        elif cur:
+            cur.append(ln)
+    if cur:
+        rows.append(" ".join(cur))
+
+    structured: list[StructuredLine] = []
+    notes: list[str] = []
+    for joined in rows:
+        sl = _parse_e_row(joined)
+        if sl is None:
+            notes.append(f"unparsed variant E row: {joined!r}")
+            continue
+        structured.append(sl)
+
+    return StructuredOrder(
+        header=_header_kv(text),
+        lines=structured,
+        parser_notes="; ".join(notes) or "variant E parsed",
+        variant="E",
+        raw_text=text,
+    )
+
+
+def _parse_e_row(joined: str) -> StructuredLine | None:
+    """Parse one variant E row.
+
+    Layout, tokens after whitespace split:
+
+        [0] 序号                (1-2 digits)
+        [1] 餐别                (one token; may have hyphens)
+        [2] 物料名称             (one token, no internal spaces observed)
+        [3] 单位                (斤/板/盒/条/...)
+        [4] 订单数量             (numeric)
+        [5] 实收数量             (numeric)
+        [6] {合计}{编码}_        (the two columns glued in the text layer)
+        [7+] 型号描述             (optional, when the 型号 trailing line was joined)
+
+    Returns None when the row cannot be parsed — caller records the row.
+    """
+    tokens = joined.split()
+    if len(tokens) < 6:
+        return None
+    try:
+        seq = int(tokens[0])
+    except ValueError:
+        return None
+
+    # Some 餐别 wrap across two text lines, leaving the second piece as
+    # tokens[2] after joining. Real product names are longer than three
+    # characters when they end with a Chinese closing parenthesis, so a
+    # short fragment that is `餐` itself or ends with `）` is the wrap.
+    unit: str
+    meal: str
+    product: str
+    nums_start: int
+    if len(tokens) >= 7 and (
+        tokens[2] == "餐"
+        or (len(tokens[2]) <= 3 and tokens[2].endswith(("）", ")")))
+    ):
+        meal = tokens[1] + tokens[2]
+        product = tokens[3]
+        unit = tokens[4]
+        nums_start = 5
+    else:
+        meal = tokens[1]
+        product = tokens[2]
+        unit = tokens[3]
+        nums_start = 4
+
+    # Collect up to three leading numeric tokens (订单数量, 实收数量, glued).
+    # The third token is the {合计}{编码} glued pair and may carry a trailing
+    # "_" that the PDF text layer uses as a column separator — strip it
+    # before the numeric check so it still enters the bucket.
+    nums: list[str] = []
+    for t in tokens[nums_start:]:
+        t_stripped = t.rstrip("_")
+        try:
+            float(t_stripped)
+        except ValueError:
+            break
+        nums.append(t_stripped)
+        if len(nums) == 3:
+            break
+
+    if len(nums) < 2:
+        return None
+    order_qty = float(nums[0])
+    received_qty = float(nums[1])
+
+    total: float | None = None
+    encoding: str | None = None
+    if len(nums) >= 3:
+        m = _E_TOTAL_ENCODING_RE.match(nums[2])
+        if m:
+            total = float(m.group(1))
+            encoding = m.group(2)
+
+    # Notes: whatever comes after the numeric block — the 型号 description
+    # when the trailing line was joined, or the raw glued token if the regex
+    # couldn't split it (still better than dropping the row).
+    notes_text = ""
+    consumed = nums_start + len(nums)
+    if consumed < len(tokens):
+        notes_text = " ".join(tokens[consumed:])
+
+    bd = StructuredBreakdown(
+        raw=meal,
+        customer_name=meal,
+        quantity=order_qty,
+        unit=unit,
+    )
+
+    extras: dict[str, Any] = {}
+    if received_qty is not None:
+        extras["received_quantity"] = received_qty
+    if total is not None:
+        extras["row_total"] = total
+    if encoding:
+        extras["encoding"] = encoding
+
+    return StructuredLine(
+        line_no=seq,
+        raw_text=joined,
+        product_name=product,
+        total_quantity=order_qty,
+        total_unit=unit,
+        breakdowns=[bd],
+        notes=notes_text or None,
+        extra=extras,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public entry
 # ---------------------------------------------------------------------------
 
@@ -731,6 +927,8 @@ def parse_supplier_order(text: str) -> StructuredOrder:
         return _parse_variant_c(text)
     if variant == "B":
         return _parse_variant_b(text)
+    if variant == "E":
+        return _parse_variant_e(text)
     if variant in ("A", "D"):
         return _parse_variant_a(text)
     return StructuredOrder(parser_notes="variant not detected", variant="unknown")

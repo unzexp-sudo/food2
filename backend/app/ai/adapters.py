@@ -1777,9 +1777,12 @@ def _structured_for(text: str) -> dict | None:
         "任务数",
         "公司采购订单",
         "广东誉元",
+        "广东尝元",
         "采购单位",
         "采购总数",
         "-----",
+        # Variant E carries 餐别 / 物料名称 / 订单数量 as column headers.
+        "餐别",
     )):
         return None
     from app.ai.structured_parser import parse_supplier_order
