@@ -23,7 +23,7 @@ import {
 } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
 import { api } from "../../api/client";
-import { useDetail, useMutate } from "../../api/hooks";
+import { LIST_POLL_MS, useDetail, useMutate } from "../../api/hooks";
 import { formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 import { parseStoredUser } from "../../types";
@@ -68,7 +68,12 @@ export default function PurchaseOrderDetailPage() {
   const user = parseStoredUser();
   const canMutate = user?.role === "admin" || user?.role === "ops";
 
-  const detail = useDetail<PurchaseOrder>(id ? `/purchase-orders/${id}` : null);
+  // Polled: a receipt posted by the warehouse against this PO, or a status
+  // change made by someone else, is not a click on this screen. Without it the
+  // page showed what was true when it was opened.
+  const detail = useDetail<PurchaseOrder>(id ? `/purchase-orders/${id}` : null, {
+    pollMs: LIST_POLL_MS,
+  });
   const po = detail.data;
   const { loading: mutateLoading, run } = useMutate();
 

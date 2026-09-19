@@ -215,6 +215,26 @@ def _held_for(db: Session, kind: str, value: str) -> list[IntakeDocument]:
     ]
 
 
+def _unbound_chat_key(doc: IntakeDocument) -> str:
+    """The grouping key `list_unbound_chats` groups by, in one place.
+
+    Both the list and the count go through this so they cannot drift: a badge
+    that disagrees with the page it badges is worse than no badge, because it
+    sends someone looking for rows that are not there.
+    """
+    return identity_block_of(doc).get("chat_key") or f"unknown:{doc.id}"
+
+
+def count_unbound_chats(db: Session) -> int:
+    """How many conversations are waiting to be bound — the nav badge.
+
+    The same grouping as `list_unbound_chats` without building the rows. The nav
+    shell polls this every 15s and needs the size of the queue, not its
+    contents.
+    """
+    return len({_unbound_chat_key(d) for d in _held_documents(db)})
+
+
 def release_held(
     db: Session,
     identity: CustomerIdentity,
@@ -430,7 +450,7 @@ def list_unbound_chats(db: Session) -> tuple[list[dict], int]:
         block = identity_block_of(doc)
         kind = block.get("kind")
         value = block.get("value")
-        key = block.get("chat_key") or f"unknown:{doc.id}"
+        key = _unbound_chat_key(doc)
         g = groups.setdefault(
             key,
             {

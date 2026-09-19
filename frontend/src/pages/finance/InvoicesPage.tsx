@@ -17,7 +17,7 @@ import {
 import { PlusOutlined } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
 import { api, type Page } from "../../api/client";
-import { useList, useMutate } from "../../api/hooks";
+import { LIST_POLL_MS, useList, useMutate } from "../../api/hooks";
 import { formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 
@@ -89,7 +89,9 @@ export default function InvoicesPage() {
     }),
     [statusFilter, customerFilter],
   );
-  const list = useList<Invoice>("/invoices", params);
+  // Polled: invoices are created by the auto-invoice handler when a delivery is
+  // completed, so they appear without anyone touching this screen.
+  const list = useList<Invoice>("/invoices", params, { pollMs: LIST_POLL_MS });
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);

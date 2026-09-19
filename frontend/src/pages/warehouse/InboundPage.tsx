@@ -16,7 +16,7 @@ import {
 import { PlusOutlined } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
 import { api, type Page } from "../../api/client";
-import { useList, useMutate } from "../../api/hooks";
+import { LIST_POLL_MS, useList, useMutate } from "../../api/hooks";
 import { formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 
@@ -77,7 +77,11 @@ export default function InboundPage() {
   const { t, lang } = useLanguage();
   const [poFilter, setPoFilter] = useState<string | undefined>();
   const params = useMemo(() => (poFilter ? { po_id: poFilter } : {}), [poFilter]);
-  const list = useList<InboundReceipt>("/inbound-receipts", params);
+  // Polled: POs are sent from the Purchase Orders screen, and the warehouse
+  // needs to see what is owed without reloading the page they are standing on.
+  const list = useList<InboundReceipt>("/inbound-receipts", params, {
+    pollMs: LIST_POLL_MS,
+  });
 
   const [sentPOs, setSentPOs] = useState<PurchaseOrder[]>([]);
   useEffect(() => {

@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Button,
   Card,
   DatePicker,
@@ -13,9 +14,10 @@ import {
   Typography,
   type TableProps,
 } from "antd";
+import dayjs from "dayjs";
 import { useLanguage } from "../../i18n";
 import { api } from "../../api/client";
-import { useList, useMutate } from "../../api/hooks";
+import { LIST_POLL_MS, useDetail, useList, useMutate } from "../../api/hooks";
 import { formatDate, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 
@@ -44,6 +46,14 @@ interface PickListDetail extends PickList {
   lines: PickLine[];
 }
 
+/** `GET /pick-lists/task-count` — the same numbers the nav badge reads. */
+interface PickTaskCount {
+  open_lines: number;
+  pending_pick_lists: number;
+  orders_awaiting_pick_list: number;
+  awaiting_dates: string[];
+}
+
 const PICK_STATUSES = ["open", "picking", "picked", "cancelled"];
 
 export default function PickListsPage() {
@@ -57,7 +67,15 @@ export default function PickListsPage() {
     }),
     [dateFilter, statusFilter],
   );
-  const list = useList<PickList>("/pick-lists", params);
+  // Polled: a pick list appears when ops consolidates a date or when a receipt
+  // is posted, neither of which is a click on this screen. Without the poll the
+  // warehouse had to reload to discover work they were already standing next to.
+  const list = useList<PickList>("/pick-lists", params, { pollMs: LIST_POLL_MS });
+
+  // Counts, on the same clock as the list. `orders_awaiting_pick_list` is the
+  // one state this table cannot show — there is no pick list row to render — so
+  // it is read separately and stated in the alert below.
+  const tasks = useDetail<PickTaskCount>("/pick-lists/task-count", { pollMs: LIST_POLL_MS });
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [detail, setDetail] = useState<PickListDetail | null>(null);
@@ -69,7 +87,22 @@ export default function PickListsPage() {
   const { loading: mutateLoading, run } = useMutate();
 
   const [genOpen, setGenOpen] = useState(false);
+  // The date the modal opens on. Held in state rather than pushed straight into
+  // the form instance: `setFieldsValue` before the Modal has mounted its Form
+  // is a no-op with a console warning, and the alert below opens this modal
+  // with a date the operator never typed.
+  const [genDate, setGenDate] = useState<string | undefined>();
   const [genForm] = Form.useForm();
+
+  const openGenerate = (date?: string) => {
+    setGenDate(date);
+    setGenOpen(true);
+  };
+
+  useEffect(() => {
+    if (!genOpen) return;
+    genForm.setFieldsValue({ delivery_date: genDate ? dayjs(genDate) : undefined });
+  }, [genOpen, genDate, genForm]);
 
   const handleRow = (id: string) => {
     setDetailOpen(true);
@@ -104,6 +137,8 @@ export default function PickListsPage() {
       // refresh detail
       api.get<PickListDetail>(`/pick-lists/${detail.id}`).then((d) => setDetail(d)).catch(() => {});
       list.refresh();
+      // The badge count moved too — picking is what clears it.
+      tasks.refresh();
     }
   };
 
@@ -123,7 +158,9 @@ export default function PickListsPage() {
     if (ok) {
       setGenOpen(false);
       genForm.resetFields();
+      setGenDate(undefined);
       list.refresh();
+      tasks.refresh();
     }
   };
 
@@ -207,11 +244,33 @@ export default function PickListsPage() {
     <Card
       title={t("pages.warehouse.pickLists.title")}
       extra={
-        <Button type="primary" onClick={() => setGenOpen(true)}>
+        <Button type="primary" onClick={() => openGenerate()}>
           {t("pages.warehouse.pickLists.generate")}
         </Button>
       }
     >
+      {/* A confirmed order for a date with no pick list has NO row in the table
+          below, so the state is invisible here by construction. Stating it —
+          with the dates, and a Generate button already pointed at the first one
+          — is the difference between "the warehouse has nothing to do" and "the
+          warehouse has not been given the list yet". */}
+      {tasks.data && tasks.data.orders_awaiting_pick_list > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={t("pages.warehouse.pickLists.awaitingPickList", {
+            count: tasks.data.orders_awaiting_pick_list,
+            dates: tasks.data.awaiting_dates.join(", "),
+          })}
+          description={t("pages.warehouse.pickLists.awaitingPickListHint")}
+          action={
+            <Button size="small" onClick={() => openGenerate(tasks.data?.awaiting_dates[0])}>
+              {t("pages.warehouse.pickLists.generate")}
+            </Button>
+          }
+        />
+      )}
       <Space wrap size="middle" style={{ marginBottom: 12 }}>
         <DatePicker
           placeholder={t("pages.warehouse.pickLists.filterDeliveryDate")}

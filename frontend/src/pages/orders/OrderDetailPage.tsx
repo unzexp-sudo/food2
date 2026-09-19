@@ -31,7 +31,7 @@ import {
 } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
 import { api, getApiError, type Page } from "../../api/client";
-import { useDetail, useMutate } from "../../api/hooks";
+import { LIST_POLL_MS, useDetail, useMutate } from "../../api/hooks";
 import { formatDate, formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 import ConfidenceTag from "../../components/ConfidenceTag";
@@ -140,7 +140,11 @@ export default function OrderDetailPage() {
   const user = parseStoredUser();
   const canMutate = user?.role === "admin" || user?.role === "ops";
 
-  const detail = useDetail<Order>(id ? `/orders/${id}` : null);
+  // Polled: the order moves while this page is open — a delivery is completed
+  // on another screen, auto-invoice flips it to `invoiced`, a colleague
+  // confirms it. The timeline at the top of this page is the thing people stare
+  // at to answer "where is this order?", so it must not be a snapshot.
+  const detail = useDetail<Order>(id ? `/orders/${id}` : null, { pollMs: LIST_POLL_MS });
   const order = detail.data;
 
   const [activeTab, setActiveTab] = useState("details");

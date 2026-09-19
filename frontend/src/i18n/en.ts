@@ -44,6 +44,29 @@ const en = {
     users: "Users",
     audit: "Audit log",
     settings: "Settings",
+    // Nav-badge copy. `*Title` is the hover text on the number and says what is
+    // being counted; the plain keys are the toasts shown when the count RISES
+    // while the app is open, i.e. when work arrives without anyone refreshing.
+    newWork: {
+      intakeTitle: "{{count}} item(s) in the intake inbox waiting to be read",
+      intake: "{{count}} new item(s) arrived in the intake inbox",
+      ordersTitle: "{{count}} order(s) waiting for a person",
+      orders: "{{count}} new order(s) waiting for a person",
+      consolidationTitle: "{{count}} confirmed order(s) waiting to be consolidated",
+      consolidation: "{{count}} new confirmed order(s) ready to consolidate",
+      purchaseOrdersTitle: "{{count}} draft purchase order(s) not sent yet",
+      purchaseOrders: "{{count}} new draft purchase order(s) to send",
+      inboundTitle: "{{count}} purchase order(s) awaiting a receipt",
+      inbound: "{{count}} more purchase order(s) awaiting a receipt",
+      pickListsTitle: "{{count}} item(s) to pick in the warehouse",
+      pickLists: "{{count}} new item(s) to pick in the warehouse",
+      deliveryTitle: "{{count}} delivery(ies) still to dispatch or complete",
+      delivery: "{{count}} new delivery(ies) on the board",
+      invoicesTitle: "{{count}} delivered order(s) with no invoice",
+      invoices: "{{count}} delivered order(s) now need an invoice",
+      identityChatsTitle: "{{count}} conversation(s) with no customer bound yet",
+      identityChats: "{{count}} new conversation(s) with no customer bound",
+    },
   },
   common: {
     save: "Save",
@@ -487,6 +510,13 @@ const en = {
         generate: "Generate",
         generateTitle: "Generate pick lists",
         generateHint: "Create pick lists for all confirmed orders for the selected delivery date.",
+        // Shown when confirmed orders exist for a date with no pick list. This
+        // state has no row in the table below, so it is stated rather than left
+        // to be discovered — an order that is ready with nothing to pick reads
+        // as a missing feature.
+        awaitingPickList: "{{count}} confirmed order(s) have no pick list yet: {{dates}}",
+        awaitingPickListHint:
+          "Nothing creates a pick list on its own. It appears when goods are received for that date (posting an inbound receipt regenerates it), or press Generate to create it now — a list generated before the stock arrives is planned from zero received quantity.",
         deliveryDate: "Delivery date",
         generateSuccess: "Pick lists generated",
         filterDeliveryDate: "Delivery date",

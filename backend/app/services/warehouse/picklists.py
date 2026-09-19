@@ -129,6 +129,67 @@ def get_pick_list(db: Session, pick_list_id: str) -> dict | None:
     return serialize_pick_list(db, pk)
 
 
+def count_pick_tasks(db: Session) -> dict:
+    """The warehouse's outstanding work, in the units the Pick Lists screen uses.
+
+    Three numbers, deliberately not summed into one — they mean different things
+    and only one of them is a queue to act on:
+
+    - `open_lines` — individual lines still to pick. **This is the nav badge.**
+      It is exactly the set of rows on the Pick Lists screen that carry a Pick
+      button, so it falls to zero when the work is done. Counting *lists*
+      instead would leave the badge sitting at 1 for a list with a single line
+      left, and would say nothing about the size of the job.
+    - `pending_pick_lists` — lists created and not finished (open|picking).
+      Reported for context; not badged, because it counts containers rather
+      than the work in them.
+    - `orders_awaiting_pick_list` + `awaiting_dates` — consolidated orders whose
+      delivery date has no pick list at all. Reported, **not badged**: the
+      allocation rule fills planned quantities from *received* stock, so
+      generating a list before the goods arrive produces zero-quantity lines
+      that then get "picked" as zero and create an empty delivery. The right
+      response to this number is "the list will appear when the goods are
+      received, or generate it deliberately" — information for the page, not a
+      nudge to press a button.
+
+    Polled by the nav shell, so it must stay three cheap counts.
+    """
+    pending_pick_lists = (
+        db.query(func.count(PickList.id))
+        .filter(PickList.status.in_(("open", "picking")))
+        .scalar()
+    )
+    open_lines = (
+        db.query(func.count(PickLine.id))
+        .join(PickList, PickList.id == PickLine.pick_list_id)
+        .filter(
+            PickLine.status == "open",
+            PickList.status.in_(("open", "picking")),
+        )
+        .scalar()
+    )
+    dates_with_lists = db.query(PickList.delivery_date).filter(
+        PickList.status != "cancelled"
+    )
+    awaiting_rows = (
+        db.query(Order.delivery_date)
+        .filter(
+            Order.status == "consolidated",
+            ~Order.delivery_date.in_(dates_with_lists),
+        )
+        .all()
+    )
+    # Distinct dates as well as a count: the page's alert names the dates, and
+    # "3 orders across 1 date" is what makes Generate a single decision.
+    awaiting_dates = sorted({r[0].isoformat() for r in awaiting_rows if r[0] is not None})
+    return {
+        "open_lines": int(open_lines or 0),
+        "pending_pick_lists": int(pending_pick_lists or 0),
+        "orders_awaiting_pick_list": len(awaiting_rows),
+        "awaiting_dates": awaiting_dates,
+    }
+
+
 # --- Generation ---------------------------------------------------------------
 
 def _received_stock_for_product_on_date(

@@ -5,6 +5,7 @@ Implements (see docs/AGENT_CONTRACTS.md §5):
   GET  /inbound-receipts          paged; filter po_id
   GET  /purchase-orders/{id}/received → receipts summary for a PO
   GET  /pick-lists                paged; filters delivery_date, status
+  GET  /pick-lists/task-count     → outstanding work for the nav badge  R: warehouse/ops
   GET  /pick-lists/{id}
   POST /pick-lists/generate       {delivery_date} R: warehouse/admin
   POST /pick-lists/{id}/lines/{line_id}/pick  R: warehouse/admin
@@ -124,6 +125,26 @@ def list_pick_lists_endpoint(
     )
     start = (page - 1) * page_size
     return page_response(items[start : start + page_size], total, page, page_size)
+
+
+@pick_router.get("/task-count", response_model=None)
+def pick_task_count_endpoint(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles("warehouse", "ops")),
+):
+    """Outstanding warehouse work, for the nav badge and the page alert.
+
+    The counterpart to `/intake/review-count` and `/orders/confirm-count`: those
+    count the two human gates before an order is real, this counts the gate
+    after it — has the warehouse picked the goods? Without it the Pick Lists
+    item had no badge at all, so a confirmed order produced a pick list that
+    nobody was told about, and the warehouse found out by refreshing a screen
+    they had no reason to open.
+
+    Declared before `/{pick_list_id}` so the literal path wins over the
+    path-parameter route — otherwise "task-count" would be parsed as an id.
+    """
+    return pick_svc.count_pick_tasks(db)
 
 
 @pick_router.get("/{pick_list_id}", response_model=None)

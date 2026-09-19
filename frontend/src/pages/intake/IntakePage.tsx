@@ -31,7 +31,7 @@ import {
 import { type Dayjs } from "dayjs";
 import { useLanguage } from "../../i18n";
 import { api, getApiError, type Page } from "../../api/client";
-import { useList, useMutate } from "../../api/hooks";
+import { LIST_POLL_MS, useList, useMutate } from "../../api/hooks";
 import { formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 import ConfidenceTag from "../../components/ConfidenceTag";
@@ -221,7 +221,13 @@ export default function IntakePage() {
     [customerFilter, sourceFilter, statusFilter, pendingOnly, parkedOnly, unboundOnly],
   );
 
-  const list = useList<IntakeDocWithJob>("/intake/documents", params);
+  // Polled, not loaded once. Orders arrive from WeCom — a webhook, not a click
+  // on this screen — so an inbox that only updates on reload is a snapshot of
+  // whenever the operator last pressed something, and the queue they are
+  // staring at can already be wrong.
+  const list = useList<IntakeDocWithJob>("/intake/documents", params, {
+    pollMs: LIST_POLL_MS,
+  });
 
   // Badge count for the "waiting for review" banner. Polled: an order can
   // land from WeCom while this tab is open, and nobody should have to hit

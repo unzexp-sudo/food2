@@ -317,8 +317,27 @@ POST /pick-lists/{id}/lines/{line_id}/pick   {picked_quantity}   R: warehouse/ad
          is completed. Dispatch and completion are the delivery endpoints below — an
          order that is never dispatched never becomes `fulfilled`.
 POST /pick-lists/generate       {delivery_date}  manual regen    R: warehouse/admin
+GET  /pick-lists/task-count     → {open_lines, pending_pick_lists, orders_awaiting_pick_list,
+                                   awaiting_dates[]}   R: warehouse/admin
+       → `open_lines` is the nav badge. `orders_awaiting_pick_list` counts consolidated
+         orders whose delivery date has NO pick list at all: confirming or consolidating
+         an order does not generate one, so until somebody presses Generate the warehouse
+         has no row to look at and the screen has to say so out loud.
 GET  /inventory?product_id=     → movements ledger  R: warehouse/admin
 POST /inventory/loss            {product_id, quantity, reason}   R: warehouse/admin
+```
+
+### work-queue (any authenticated role)
+```
+GET  /work-queue                → {section: count}   R: any authenticated user
+       → Every nav badge in one round trip, already scoped to the sections this role can
+         act on. Sections the role cannot act on are **omitted**, not returned as 0.
+       → The counts mirror the predicate of the page they badge, and each one counts work
+         waiting on a person — not work waiting on someone else. Sections: intake, orders,
+         consolidation, purchase_orders, inbound, pick_lists, delivery, invoices,
+         identity_chats.
+       → `app/services/workqueue.ROLE_SECTIONS` and `AdminLayout.WORK_BADGES` must agree;
+         `tests/test_work_queue.py` parses the TSX and fails if they drift.
 ```
 
 ### delivery (warehouse agent)
@@ -421,6 +440,11 @@ Build it by walking: `order_line → consolidation_batch_lines → purchase_orde
   /system/settings           Settings (admin)
   ```
 - API client at `src/api/client.ts` (axios, `baseURL: "/api/v1"`, Bearer token, 401 → redirect to /login). Shared hooks in `src/api/hooks.ts`.
+- **Live by default.** Every operational list and detail page passes `{ pollMs: LIST_POLL_MS }` (15s) to `useList`/`useDetail`, and the nav shell polls `GET /work-queue` on `BADGE_POLL_MS`. Polling rather than SSE/websockets: one auth header, no long-lived connection through the platform proxy, and the failure mode of a dropped poll is "one stale tick" instead of "silently dead stream".
+  - A poll is **silent**: it does not raise `loading`, and a failed poll keeps the rows already on screen. A refresh that flashes a spinner every 15s, or that empties a table because one request timed out, is worse than no refresh.
+  - A hidden tab does not poll; `visibilitychange` ticks immediately, so returning to the app is never up to 15s stale.
+  - Badge toasts fire on **increase only**, and never on the first reading — with no baseline, "went up" would mean "this app has a queue".
+- **Badges come from the server, never from a page-local count.** A new gated section is added by (1) a count in `app/services/workqueue.collect`, (2) an entry in `ROLE_SECTIONS`, (3) an entry in `AdminLayout.WORK_BADGES` whose `roles` match the nav item's, and (4) `nav.newWork.*` keys in both `en.ts` and `zh.ts`. `tests/test_work_queue.py` fails if (2) and (3) disagree — a typo there goes quiet rather than erroring.
 - Role-based UI: hide menu items the role can't use (roles: admin sees all; ops: intake/orders/consolidation/POs/master; warehouse: warehouse/delivery; finance: finance + read orders; driver: delivery).
 - Dates: display `YYYY-MM-DD`; datetimes `YYYY-MM-DD HH:mm`.
 - Confidence: API 0–1 → display as percent, color: ≥0.95 green, ≥0.7 orange, else red.

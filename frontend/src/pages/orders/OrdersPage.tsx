@@ -18,7 +18,7 @@ import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
 import { type Dayjs } from "dayjs";
 import { useLanguage } from "../../i18n";
 import { api, type Page } from "../../api/client";
-import { useList, useMutate } from "../../api/hooks";
+import { LIST_POLL_MS, useList, useMutate } from "../../api/hooks";
 import { formatDate, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 import ConfidenceTag from "../../components/ConfidenceTag";
@@ -128,7 +128,9 @@ export default function OrdersPage() {
     [statusFilter, customerFilter, deliveryFilter, q, awaitingOnly],
   );
 
-  const list = useList<Order>("/orders", params);
+  // Polled: orders are created by intake (a WeCom webhook) and change status
+  // from other screens, so this list has to keep up on its own.
+  const list = useList<Order>("/orders", params, { pollMs: LIST_POLL_MS });
 
   // Badge count for the "waiting for confirmation" banner. Polled: an order
   // can arrive from WeCom while this tab is open, and nobody should have to

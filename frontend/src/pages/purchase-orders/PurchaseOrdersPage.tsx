@@ -10,7 +10,7 @@ import {
 } from "antd";
 import { useLanguage } from "../../i18n";
 import { api, type Page } from "../../api/client";
-import { useList } from "../../api/hooks";
+import { LIST_POLL_MS, useList } from "../../api/hooks";
 import { formatDate, formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 import PoReceiveModal from "./PoReceiveModal";
@@ -62,7 +62,9 @@ export default function PurchaseOrdersPage() {
     }),
     [statusFilter, wholesalerFilter, deliveryFilter],
   );
-  const list = useList<PurchaseOrder>("/purchase-orders", params);
+  // Polled: POs are created by the Consolidation screen, so this list has to
+  // pick up new drafts and receipts without being reloaded.
+  const list = useList<PurchaseOrder>("/purchase-orders", params, { pollMs: LIST_POLL_MS });
 
   const [wholesalers, setWholesalers] = useState<Wholesaler[]>([]);
   useEffect(() => {

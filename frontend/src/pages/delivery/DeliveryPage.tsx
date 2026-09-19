@@ -29,7 +29,7 @@ import {
 } from "@ant-design/icons";
 import { useLanguage } from "../../i18n";
 import { api, getApiError, type Page } from "../../api/client";
-import { useList, useMutate } from "../../api/hooks";
+import { LIST_POLL_MS, useList, useMutate } from "../../api/hooks";
 import { formatDate, formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 import client from "../../api/client";
@@ -119,7 +119,10 @@ export default function DeliveryPage() {
     }),
     [dateFilter, statusFilter, driverFilter],
   );
-  const list = useList<Delivery>("/deliveries", params);
+  // Polled: deliveries are created by the warehouse when a pick list is
+  // finished, and a driver moving a status changes what the dispatcher should
+  // see. Both happen off this screen.
+  const list = useList<Delivery>("/deliveries", params, { pollMs: LIST_POLL_MS });
 
   const [drivers, setDrivers] = useState<User[]>([]);
   useEffect(() => {

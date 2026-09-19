@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Badge, Layout, Menu, Segmented, Tag, Typography, Button, Switch, Spin } from "antd";
 import {
@@ -35,6 +35,8 @@ import { useLanguage, type Lang } from "../i18n";
 import { useThemeMode } from "../theme-context";
 import { parseStoredUser, type CurrentUser, type Role } from "../types";
 import { api } from "../api/client";
+import { BADGE_POLL_MS } from "../api/hooks";
+import { getMessage } from "../api/message";
 import ConfigWarnings from "../components/ConfigWarnings";
 
 const { Header, Sider, Content } = Layout;
@@ -139,6 +141,85 @@ const ROLE_TAG_COLORS: Record<Role, string> = {
   driver: "orange",
 };
 
+/**
+ * Every section that waits on a human, and the nav item its badge hangs on.
+ *
+ * `nav` is the nav key (the route path); `queue` is the key `GET /work-queue`
+ * returns. `titleKey` is the hover text explaining the number, `toastKey` is the
+ * message shown when the number RISES while the app is open.
+ *
+ * **Add an entry here whenever you add a nav item that waits on a person, and
+ * add the matching count to `app/services/workqueue.py`.** A section that has no
+ * queue — a report, a ledger, a settings page — has no entry and no badge, which
+ * is the point: a badge that counts something you cannot act on teaches people
+ * to ignore badges. A typo in `queue` does not error, it just goes quiet, so
+ * `tests/test_work_queue.py` pins this list against the server's.
+ */
+const WORK_BADGES: {
+  nav: string;
+  queue: string;
+  titleKey: string;
+  toastKey: string;
+}[] = [
+  {
+    nav: "/intake",
+    queue: "intake",
+    titleKey: "nav.newWork.intakeTitle",
+    toastKey: "nav.newWork.intake",
+  },
+  {
+    nav: "/orders",
+    queue: "orders",
+    titleKey: "nav.newWork.ordersTitle",
+    toastKey: "nav.newWork.orders",
+  },
+  {
+    nav: "/consolidation",
+    queue: "consolidation",
+    titleKey: "nav.newWork.consolidationTitle",
+    toastKey: "nav.newWork.consolidation",
+  },
+  {
+    nav: "/purchase-orders",
+    queue: "purchase_orders",
+    titleKey: "nav.newWork.purchaseOrdersTitle",
+    toastKey: "nav.newWork.purchaseOrders",
+  },
+  {
+    nav: "/warehouse/inbound",
+    queue: "inbound",
+    titleKey: "nav.newWork.inboundTitle",
+    toastKey: "nav.newWork.inbound",
+  },
+  {
+    nav: "/warehouse/pick-lists",
+    queue: "pick_lists",
+    titleKey: "nav.newWork.pickListsTitle",
+    toastKey: "nav.newWork.pickLists",
+  },
+  {
+    nav: "/delivery",
+    queue: "delivery",
+    titleKey: "nav.newWork.deliveryTitle",
+    toastKey: "nav.newWork.delivery",
+  },
+  {
+    nav: "/finance/invoices",
+    queue: "invoices",
+    titleKey: "nav.newWork.invoicesTitle",
+    toastKey: "nav.newWork.invoices",
+  },
+  {
+    nav: "/identity/chats",
+    queue: "identity_chats",
+    titleKey: "nav.newWork.identityChatsTitle",
+    toastKey: "nav.newWork.identityChats",
+  },
+];
+
+const BADGE_BY_NAV = new Map(WORK_BADGES.map((b) => [b.nav, b]));
+const BADGE_BY_QUEUE = new Map(WORK_BADGES.map((b) => [b.queue, b]));
+
 /** Centered spinner shown while a lazily-loaded route chunk is fetched. */
 function RouteFallback() {
   return (
@@ -163,51 +244,81 @@ export default function AdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [user] = useState<CurrentUser | null>(() => parseStoredUser());
 
-  // The three human gates, shown as unread-style badges on the nav items so
-  // nobody has to open a page — or wait for a push message — to know work
-  // arrived. Intake = "read this order"; Orders = "confirm this order";
-  // Unbound chats = "say which customer this conversation is".
-  const [pendingReview, setPendingReview] = useState(0);
-  const [awaitingConfirm, setAwaitingConfirm] = useState(0);
-  const [unboundChats, setUnboundChats] = useState(0);
+  // Work waiting on a person, keyed by section, straight from `/work-queue`.
+  //
+  // One request per tick for every gate in the app, not one per section: the
+  // shell wants all of them at the same moment, and the server already scopes
+  // the response to what this role can act on. Polled so nobody has to reload —
+  // orders, WeCom messages and receipts all arrive from outside this tab.
+  const [work, setWork] = useState<Record<string, number>>({});
+
+  // Previous reading per section, so a count going UP can be told apart from a
+  // count being read for the first time. A ref, not state: it must not itself
+  // re-render, and it must survive the effect re-running on every navigation.
+  const lastCounts = useRef<Record<string, number | null>>({});
+  // Latest translator, read at toast time. Deliberately not an effect
+  // dependency: `t` is not guaranteed to be referentially stable, and an
+  // unstable one would re-run the effect, which re-ticks, which re-renders — a
+  // poll loop that looks like a request flood.
+  const tRef = useRef(t);
+  tRef.current = t;
+
   useEffect(() => {
+    if (!user) return;
     let cancelled = false;
+
     const tick = () => {
       api
-        .get<{ pending_review: number; parked?: number }>("/intake/review-count")
-        .then((r) => {
-          if (!cancelled) setPendingReview(r.pending_review ?? 0);
+        .get<Record<string, number>>("/work-queue")
+        .then((counts) => {
+          if (cancelled) return;
+          setWork(counts);
+          for (const [queue, n] of Object.entries(counts)) {
+            const copy = BADGE_BY_QUEUE.get(queue);
+            if (!copy) continue;
+            const before = lastCounts.current[queue];
+            lastCounts.current[queue] = n;
+            // The first reading never announces: with no baseline, "went up"
+            // would mean "this app has a queue" rather than "work just arrived",
+            // and a toast on every page load is how people learn to dismiss
+            // toasts without reading them.
+            if (before === null || before === undefined || n <= before) continue;
+            getMessage()?.info(tRef.current(copy.toastKey, { count: n - before }));
+          }
         })
         .catch(() => {
           /* badge is cosmetic — never let it break the shell */
         });
-      api
-        .get<{ awaiting_confirmation: number }>("/orders/confirm-count")
-        .then((r) => {
-          if (!cancelled) setAwaitingConfirm(r.awaiting_confirmation ?? 0);
-        })
-        .catch(() => {
-          /* ditto */
-        });
-      api
-        .get<{ items: unknown[]; total: number }>("/identity/unbound")
-        .then((r) => {
-          if (!cancelled) setUnboundChats(r.total ?? 0);
-        })
-        .catch(() => {
-          /* ditto */
-        });
     };
+
     tick();
-    const id = setInterval(tick, 30_000);
+    // A hidden tab does not poll; returning to it ticks immediately, so coming
+    // back is never up to 15s stale.
+    const id = setInterval(() => {
+      if (!document.hidden) tick();
+    }, BADGE_POLL_MS);
+    const onVisible = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [location.pathname]);
+  }, [location.pathname, user]);
 
   const menuItems = useMemo(() => {
     if (!user) return [];
+    // Each badge counts ONE thing: work waiting on that gate, for this role.
+    // Parked messages are deliberately not folded in anywhere. A badge that
+    // counts things you cannot action teaches people to ignore badges, and then
+    // a real order stops getting noticed — parked is surfaced on the intake page
+    // and the dashboard instead, clearly labelled.
+    //
+    // The title matters as much as the number: a bare "4" on a nav item is a
+    // puzzle, and "4 what?" is the question that made a missing badge read as a
+    // broken feature rather than a missing one.
     return MENU_GROUPS.map((group) => ({
       key: group.key,
       type: "group" as const,
@@ -216,25 +327,19 @@ export default function AdminLayout() {
         .filter((item) => item.roles.includes(user.role))
         .map((item) => {
           const label = t(item.labelKey);
-          // Counts are per-gate and mean exactly one thing: "work waiting".
-          // Parked messages are deliberately NOT added here. A badge that
-          // counts things you cannot action teaches people to ignore badges,
-          // and then a real order stops getting noticed. Parked is surfaced
-          // on the intake page and dashboard instead, clearly labelled.
-          const badgeCount =
-            item.key === "/intake"
-              ? pendingReview
-              : item.key === "/orders"
-                ? awaitingConfirm
-                : item.key === "/identity/chats"
-                  ? unboundChats
-                  : 0;
+          const badge = BADGE_BY_NAV.get(item.key);
+          const count = badge ? (work[badge.queue] ?? 0) : 0;
           return {
             key: item.key,
             icon: item.icon,
             label:
-              badgeCount > 0 ? (
-                <Badge count={badgeCount} size="small" offset={[10, 0]}>
+              badge && count > 0 ? (
+                <Badge
+                  count={count}
+                  size="small"
+                  offset={[10, 0]}
+                  title={t(badge.titleKey, { count })}
+                >
                   {label}
                 </Badge>
               ) : (
@@ -243,7 +348,7 @@ export default function AdminLayout() {
           };
         }),
     })).filter((group) => group.children.length > 0);
-  }, [t, user, pendingReview, awaitingConfirm, unboundChats]);
+  }, [t, user, work]);
 
   // Highlight the menu item whose route matches (also for detail sub-paths).
   const selectedKey = useMemo(() => {

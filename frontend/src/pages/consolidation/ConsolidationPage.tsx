@@ -17,7 +17,7 @@ import { PlayCircleOutlined } from "@ant-design/icons";
 import { type Dayjs } from "dayjs";
 import { useLanguage } from "../../i18n";
 import { api } from "../../api/client";
-import { useList, useMutate } from "../../api/hooks";
+import { LIST_POLL_MS, useList, useMutate } from "../../api/hooks";
 import { formatDate, formatDateTime, pickName } from "../../utils/format";
 import StatusTag from "../../components/StatusTag";
 
@@ -85,7 +85,11 @@ export default function ConsolidationPage() {
     }),
     [deliveryFilter, statusFilter],
   );
-  const list = useList<ConsolidationBatch>("/consolidation/batches", params);
+  // Polled: orders reach `confirmed` from the Orders screen, which is a
+  // different page — the batch list has to notice on its own.
+  const list = useList<ConsolidationBatch>("/consolidation/batches", params, {
+    pollMs: LIST_POLL_MS,
+  });
 
   // Run form.
   const [runDate, setRunDate] = useState<Dayjs | null>(null);

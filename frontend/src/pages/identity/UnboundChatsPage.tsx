@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Alert, Button, Card, Space, Table, Tag, Typography } from "antd";
 import { ReloadOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
 import { api, getApiError } from "../../api/client";
+import { LIST_POLL_MS } from "../../api/hooks";
 import { useLanguage } from "../../i18n";
 import { formatDateTime } from "../../utils/format";
 import { parseStoredUser } from "../../types";
@@ -35,21 +36,50 @@ export default function UnboundChatsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    api
-      .get<UnboundResponse>("/identity/unbound")
-      .then((res) => {
-        setItems(res.items ?? []);
-        setTotal(res.total ?? 0);
-        setError(null);
-      })
-      .catch((err) => setError(getApiError(err) ?? t("pages.identity.queue.loadError")))
-      .finally(() => setLoading(false));
-  }, [t]);
+  const load = useCallback(
+    (silent = false) => {
+      if (!silent) setLoading(true);
+      api
+        .get<UnboundResponse>("/identity/unbound")
+        .then((res) => {
+          setItems(res.items ?? []);
+          setTotal(res.total ?? 0);
+          setError(null);
+        })
+        .catch((err) => {
+          // A failed poll keeps the rows already on screen: they are still the
+          // best information available, and clearing them would look like the
+          // queue had been worked.
+          if (!silent) setError(getApiError(err) ?? t("pages.identity.queue.loadError"));
+        })
+        .finally(() => {
+          if (!silent) setLoading(false);
+        });
+    },
+    [t],
+  );
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  // Polled, not loaded once. A conversation becomes unbound the moment a
+  // message arrives from a chat nobody has identified — an event with no
+  // connection to this tab — and this screen is the only place that decision is
+  // visible. Without the poll the operator is reading a snapshot and has no way
+  // to know it is stale.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!document.hidden) load(true);
+    }, LIST_POLL_MS);
+    const onVisible = () => {
+      if (!document.hidden) load(true);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [load]);
 
   const openBind = (chat: UnboundChat) => {
@@ -122,7 +152,7 @@ export default function UnboundChatsPage() {
     <Card
       title={t("pages.identity.queue.title")}
       extra={
-        <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
+        <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading}>
           {t("common.refresh")}
         </Button>
       }

@@ -29,8 +29,9 @@ from app.api.v1 import (
     quotations,
     system,
     warehouse,
-    wholesalers,
     wecom_intake,
+    work_queue,
+    wholesalers,
 )
 from app.core.config import settings
 from app.core.database import SessionLocal, init_db, is_deployed
@@ -147,7 +148,7 @@ app.add_middleware(
 for module in (
     auth, system, customers, catalog, wholesalers, contracts,
     identity, intake, orders, procurement, quotations, warehouse, delivery,
-    finance, wecom_intake,
+    finance, wecom_intake, work_queue,
 ):
     app.include_router(module.router)
 
