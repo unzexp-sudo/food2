@@ -274,3 +274,64 @@ def test_shadow_report_does_not_list_real_orders(client):  # noqa: F811
 
     excerpts = [p["excerpt"] for p in report["would_park"]]
     assert "土豆 50斤\n大白菜 30斤" not in excerpts, "a real order must never be parked"
+
+
+# --- Why Tier 1 is never parked ----------------------------------------------
+#
+# Found on the live production backlog, after the backfill was applied and one
+# message ("test") was left behind. The temptation is to widen the park rule to
+# score <= 0 and be done with it. These two messages are the reason that is not
+# a fix: they are indistinguishable to the classifier in every field it
+# records, and only one of them is junk.
+
+def test_a_test_message_and_a_bare_product_name_are_indistinguishable():
+    """The sharpest form of the safety argument, and the one that was measured.
+
+    Both score 0 at Tier 1 with no reasons recorded. Nothing in the verdict
+    distinguishes them, so any rule that parks one parks the other. The junk
+    costs a reviewer one glance; the bare product name is a customer's whole
+    order. That asymmetry is why Tier 1 stays in the inbox.
+
+    This is a measurement, not a requirement. If a later classifier genuinely
+    separates the two -- say by knowing the product catalogue -- this test
+    SHOULD fail, and the right response is to update it and check that the new
+    park rule catches the junk and nothing else. It is here so that widening
+    the rule is a decision someone makes on purpose, not a side effect.
+    """
+    junk = classify("test")
+    order = classify("土豆")
+
+    assert junk.decision == order.decision == NOT_ORDER
+    assert junk.tier == order.tier == "tier1"
+    assert junk.score == order.score == 0
+    assert list(junk.reasons) == list(order.reasons) == []
+
+
+@pytest.mark.parametrize("text", ["土豆", "大白菜", "五花肉", "西红柿", "鸡蛋"])
+def test_a_bare_product_name_is_never_parkable(text):
+    """The hard invariant, and the one that must never break.
+
+    A customer who sends nothing but a product name has sent an order. It is
+    the shortest possible real order, it is not unusual, and parking it loses
+    a sale rather than saving a glance. Unlike the test above, this one has no
+    legitimate reason to ever fail.
+    """
+    assert classify(text).tier != "tier0", (
+        f"{text!r} became parkable -- a bare product name is a real order and "
+        "would now be hidden from the inbox"
+    )
+
+
+@pytest.mark.parametrize("text", ["test", "测试", "scan", "count", "raise", "no shipping"])
+def test_bare_words_that_are_not_orders_stay_in_the_inbox(text):
+    """A known, accepted cost rather than an oversight.
+
+    These read as chatter to a human and would be cheap to hide. They stay
+    visible because the classifier cannot tell them apart from a bare product
+    name. If this starts failing, the park rule or the classifier changed --
+    check what else it now catches before updating it.
+    """
+    v = classify(text)
+    assert v.tier != "tier0", (
+        f"{text!r} became parkable; verify it cannot be confused with a product name"
+    )
