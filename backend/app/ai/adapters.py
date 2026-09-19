@@ -1124,6 +1124,21 @@ class MistralOcrExtractor:
         structured: dict | None = None
         doc_type = "ocr_image" if source_type == "image" else "ocr_pdf"
 
+        # Count the figure references BEFORE markdown_to_text discards them.
+        #
+        # This is the only evidence there is. `figures` above counts the
+        # vendor's `images` array, and we ask for that array without base64 —
+        # so in the real failure it is EMPTY and `figures` is 0. Confirmed live
+        # on 2026-09-19: a page whose table came back as `tbl-0.md` reported
+        # zero figures and four header lines, so a guard keyed on `figures`
+        # never fired. The reference in the markdown is the tell.
+        figure_refs = sum(
+            1
+            for ln in markdown.splitlines()
+            if _VENDOR_FIGURE_NAME_RE.fullmatch(ln.strip())
+        )
+        figure_evidence = figures + figure_refs
+
         # Markdown is not text — see markdown_to_text. Same dispatch order as the
         # typed path: a recognized supplier-order table keeps its header and its
         # sub-customer breakdowns.
@@ -1156,9 +1171,10 @@ class MistralOcrExtractor:
             # Dropping the lines is the safe half. The useful half is re-reading
             # the page — see _vision_rescue — because "we noticed the page is
             # unreadable" does not put 14 rows back on the order.
-            if figures and lines and not _ORDER_QUANTITY_HINT_RE.search(text):
+            if figure_evidence and lines and not _ORDER_QUANTITY_HINT_RE.search(text):
                 notes.append(
-                    f"table returned as {figures} figure(s) instead of text — "
+                    f"table returned as a figure instead of text "
+                    f"({figure_refs} reference(s), {figures} image(s)) — "
                     f"discarding {len(lines)} header-only line(s)"
                 )
                 lines = []
@@ -1166,7 +1182,7 @@ class MistralOcrExtractor:
                     source_type=source_type,
                     file_path=file_path,
                     original_filename=original_filename,
-                    figures=figures,
+                    figures=figure_evidence,
                 )
                 if rescued is not None:
                     if rescued.lines:
@@ -1209,8 +1225,11 @@ class MistralOcrExtractor:
             # page confidence is high, no line carries a review reason, and the
             # gate would happily approve an EMPTY order.
             extra = "no line items could be read from the document"
-            if figures:
-                extra += f" ({figures} figure(s) were extracted instead of text)"
+            if figure_evidence:
+                extra += (
+                    f" ({figure_evidence} figure(s)/reference(s) were returned "
+                    f"instead of text)"
+                )
             result.parser_notes = (result.parser_notes + "; " + extra).strip("; ")
             result.requires_human_review = True
         return result

@@ -440,6 +440,36 @@ def test_a_figure_only_page_is_re_read_and_the_rows_come_back(
     assert "任务数" not in [l.product_name for l in result.lines]
 
 
+def test_the_rescue_fires_on_a_reference_when_the_vendor_returns_no_images(
+    tmp_path, monkeypatch, rescue_on
+):
+    """Exactly the production failure.
+
+    `include_image_base64` is off, so pages carry no `images` array and the
+    figure count is 0. The rescue originally keyed on that count, so on the real
+    14-row order it never ran and the page stayed at four header lines. The
+    `tbl-0.md` reference in the markdown is what identifies the page.
+    """
+    calls = _capture_both(
+        monkeypatch,
+        _ocr_page(FIGURE_ONLY_MARKDOWN, figures=0),
+        _reply({"lines": [
+            {"line_no": 1, "product_name": "土豆", "total_quantity": 50, "unit": "斤"},
+            {"line_no": 2, "product_name": "大白菜", "total_quantity": 30, "unit": "斤"},
+        ]}),
+    )
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=_img(tmp_path), original_filename="order.png"
+    )
+
+    assert [(l.product_name, l.quantity) for l in result.lines] == [
+        ("土豆", 50.0),
+        ("大白菜", 30.0),
+    ]
+    assert any("chat/completions" in c["url"] for c in calls)
+
+
 def test_the_rescue_does_not_fire_when_the_ocr_read_real_quantities(
     tmp_path, monkeypatch, rescue_on
 ):

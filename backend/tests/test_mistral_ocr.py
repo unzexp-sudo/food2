@@ -630,16 +630,49 @@ def test_a_page_with_figures_that_still_has_quantities_keeps_its_lines(
     assert "discarding" not in result.parser_notes
 
 
-def test_no_figures_means_the_guard_cannot_fire(tmp_path, monkeypatch, mistral_on):
-    """Header-only text with no figure extracted is just a page with little on
-    it. There is nothing to blame, so the note must not claim a figure."""
+def test_a_figure_reference_alone_is_enough_to_trigger_the_guard(
+    tmp_path, monkeypatch, mistral_on
+):
+    """The production case, and the reason the guard was rewritten.
+
+    `include_image_base64` is off, so the vendor returns NO images array and the
+    figure COUNT is zero. The `tbl-0.md` reference in the markdown is the only
+    evidence the table was dropped — and a guard keyed on the image count did
+    not fire on the real document at all. Observed 2026-09-19: the failing page
+    reported zero figures and four header lines."""
     path = tmp_path / "order.png"
     path.write_bytes(PNG_BYTES)
-    _capture(monkeypatch, _payload(FIGURE_ONLY_MARKDOWN, figures=0))
+    _capture(monkeypatch, _payload(FIGURE_ONLY_MARKDOWN, score=0.30, minimum=0.30, figures=0))
 
     result = MistralOcrExtractor().extract(
         source_type="image", file_path=str(path), original_filename="order.png"
     )
 
-    assert result.lines, "without a figure there is nothing to discard"
+    assert result.lines == [], [l.product_name for l in result.lines]
+    assert "figure" in result.parser_notes
+
+
+def test_no_figure_evidence_at_all_means_the_guard_cannot_fire(
+    tmp_path, monkeypatch, mistral_on
+):
+    """Header-only text, with no images AND no figure reference, is just a page
+    with little on it. There is nothing to blame, so nothing is discarded.
+
+    Deliberately not the failing document: that one had no images either and was
+    identified by its reference alone, which is the case above."""
+    path = tmp_path / "order.png"
+    path.write_bytes(PNG_BYTES)
+    header_only = (
+        "广东崇元绿色食品有限公司\n\n"
+        "采购单位: 广东来赫生餐饮有限公司\n"
+        "打印时间: 2026-09-02 20:49:01\n"
+        "任务数: 14"
+    )
+    _capture(monkeypatch, _payload(header_only, figures=0))
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=str(path), original_filename="order.png"
+    )
+
+    assert result.lines, "without any figure evidence there is nothing to discard"
     assert "discarding" not in result.parser_notes
