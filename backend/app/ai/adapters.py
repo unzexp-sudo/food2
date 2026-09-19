@@ -987,15 +987,46 @@ _VENDOR_FIGURE_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
-# A number immediately followed by a unit — the smallest signal that a piece
-# of text actually contains order rows rather than page furniture. Used to tell
-# "the OCR read the table" apart from "the OCR returned the table as a figure".
-_ORDER_QUANTITY_HINT_RE = re.compile(
-    r"\d+(?:\.\d+)?\s*"
-    r"(?:斤|公斤|千克|克|箱|袋|包|个|只|份|件|瓶|条|块|把|棵|根|盒|桶|"
-    r"kg|g|jin|box|boxes|bag|bags|pcs|piece|pieces|case|cases|unit|units)",
-    re.IGNORECASE,
+# Labels that belong to the PAGE, not to a row of it. A quantity under one of
+# these is page furniture wearing a number — a remark, a total, a task count —
+# not a line anyone ordered.
+_PAGE_FURNITURE_RE = re.compile(
+    r"(备注|说明|收货单位|送货单位|采购单位|供货单位|客户|日期|打印时间|"
+    r"任务数|合计|小计|总计|地址|电话|存根|包装包|经手人|送货单)",
 )
+
+# How many genuine order rows the surviving text must contain before the page
+# is trusted as read, and the figure rescue left alone.
+#
+# ONE. Not two: a real single-row note ("土豆 50斤") is a legitimate document,
+# and discarding it because the OCR also cropped a stamp or a logo out of the
+# same page would be throwing away the one row that WAS read.
+#
+# The old rule was "a number followed by a unit anywhere in the text", and one
+# stray match was enough to call the page read. Observed live on a second real
+# document, a 送货单 photographed on a phone: the OCR returned its table as
+# `[tbl-0.md](tbl-0.md)`, and the only quantity on the page sat inside
+# `备注: - 旺仔牛奶 少2盒,不次补;` — "Wangzai milk, short 2 boxes, will not
+# re-supply". A REMARK vetoed the rescue, so the page kept twelve lines of
+# furniture, including its serial number `No 6096321` emitted as a product at
+# quantity 6,096,321 — a confident-looking line for goods nobody ordered.
+_MIN_READ_ROWS_TO_TRUST_TEXT = 1
+
+
+def _order_rows_in(lines: list[RawLine]) -> int:
+    """Rows that look like order rows: a quantity AND a unit, on a real name.
+
+    All three are needed. A quantity on its own is a page number or a serial
+    ("No 6096321" parses as 6,096,321). A quantity with a unit is still not
+    enough if the name is the page talking about itself — 备注, 任务数, 合计.
+    """
+    return sum(
+        1
+        for ln in lines
+        if ln.quantity is not None
+        and str(ln.unit or "").strip()
+        and not _PAGE_FURNITURE_RE.search(str(ln.product_name or ""))
+    )
 
 
 def _normalize_md_line(raw_line: str) -> str:
@@ -1219,11 +1250,13 @@ class MistralOcrExtractor:
             # Dropping the lines is the safe half. The useful half is re-reading
             # the page — see _vision_rescue — because "we noticed the page is
             # unreadable" does not put 14 rows back on the order.
-            if figure_evidence and lines and not _ORDER_QUANTITY_HINT_RE.search(text):
+            read_rows = _order_rows_in(lines)
+            if figure_evidence and lines and read_rows < _MIN_READ_ROWS_TO_TRUST_TEXT:
                 notes.append(
                     f"table returned as a figure instead of text "
                     f"({figure_refs} reference(s), {figures} image(s)) — "
-                    f"discarding {len(lines)} header-only line(s)"
+                    f"discarding {len(lines)} non-order line(s) "
+                    f"({read_rows} read row(s))"
                 )
                 lines = []
                 rescued = self._vision_rescue(

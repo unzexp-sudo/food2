@@ -380,6 +380,26 @@ FIGURE_ONLY_MARKDOWN = (
 )
 
 
+# A SECOND real production document, verbatim from the /ocr endpoint on
+# 2026-09-19: a 送货单 photographed on a phone. Same defect — the table came
+# back as `[tbl-0.md](tbl-0.md)` — but this page also carries a REMARK with a
+# number and a unit in it, which is what used to veto the rescue.
+DELIVERY_NOTE_MARKDOWN = (
+    "19:40 N\n\n"
+    "60° 65%\n\n"
+    "# 送货单\n\n"
+    "No 6096321\n\n"
+    "客户：老刘超市\n\n"
+    "日期：2024.6.18\n\n"
+    "[tbl-0.md](tbl-0.md)\n\n"
+    "①存根(红)\n\n"
+    "包装包(红)\n\n"
+    "包装包(黄)\n\n"
+    "收货单位及经手人(盖章): 老刘 送货单位及经手人(盖章): 孙金峰\n"
+    "备注: - 旺仔牛奶 少2盒,不次补;"
+)
+
+
 def _ocr_page(markdown: str, figures: int = 0) -> dict:
     return {
         "pages": [{
@@ -496,6 +516,63 @@ def test_the_rescue_does_not_fire_when_the_ocr_read_real_quantities(
         ("大白菜", 30.0),
     ]
     assert not any("chat/completions" in c["url"] for c in calls)
+
+
+def test_a_remark_quantity_does_not_veto_the_rescue(tmp_path, monkeypatch, rescue_on):
+    """The second real document, and the reason the veto changed shape.
+
+    The 送货单's table was dropped exactly like the supplier order's, but its
+    surviving text contains `备注: - 旺仔牛奶 少2盒,不次补;` — "short 2 boxes".
+    The old rule was "any number followed by a unit anywhere in the text", so
+    that REMARK was enough to call the page read. It kept twelve lines of page
+    furniture, including the document's serial number `No 6096321` emitted as a
+    product at quantity 6,096,321.
+
+    A remark is one row; an order table is several. That is the discriminator.
+    """
+    calls = _capture_both(
+        monkeypatch,
+        _ocr_page(DELIVERY_NOTE_MARKDOWN, figures=0),
+        _reply({"lines": [
+            {"line_no": 1, "product_name": "旺仔牛奶", "total_quantity": 2, "unit": "盒"},
+            {"line_no": 2, "product_name": "矿泉水", "total_quantity": 5, "unit": "箱"},
+        ]}),
+    )
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=_img(tmp_path), original_filename="note.png"
+    )
+
+    assert [(l.product_name, l.quantity) for l in result.lines] == [
+        ("旺仔牛奶", 2.0),
+        ("矿泉水", 5.0),
+    ]
+    assert any("chat/completions" in c["url"] for c in calls)
+    # The serial number must not survive as an order line.
+    assert "6096321" not in [str(l.quantity) for l in result.lines]
+
+
+def test_one_real_row_is_enough_to_trust_the_text(tmp_path, monkeypatch, rescue_on):
+    """The other half of the rule, and the reason the threshold is ONE.
+
+    A single-line note is a real document. A page can carry a cropped figure
+    (a stamp, a logo, a second table) alongside a row the OCR DID read, and
+    paying the vision model to re-read that page would throw away the one row
+    we have — and replace a scored line with an unscored one.
+    """
+    calls = _capture_both(
+        monkeypatch,
+        _ocr_page("土豆 50斤\n[tbl-0.md](tbl-0.md)", figures=0),
+        _reply({"lines": []}),
+    )
+
+    result = MistralOcrExtractor().extract(
+        source_type="image", file_path=_img(tmp_path), original_filename="note.png"
+    )
+
+    assert [(l.product_name, l.quantity) for l in result.lines] == [("土豆", 50.0)]
+    assert not any("chat/completions" in c["url"] for c in calls)
+    assert "discarding" not in result.parser_notes
 
 
 def test_the_rescue_stays_off_when_it_is_switched_off(tmp_path, monkeypatch, rescue_on):
