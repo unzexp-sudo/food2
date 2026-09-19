@@ -33,7 +33,7 @@ from app.models import (
 )
 from app.services.identity.service import identity_block_of, is_unbound
 from app.services.intake.company_proposal import build_company_proposal
-from app.services.intake.triage import NOT_ORDER
+from app.services.intake.triage import NOT_ORDER, classify_message
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +273,12 @@ def _triage_out(doc: IntakeDocument) -> dict | None:
         "excerpt": verdict.get("excerpt"),
         "parked": bool(verdict.get("parked")),
         "overridden": bool(verdict.get("overridden")),
+        # Written only by the backfill, and only when the rules moved under a
+        # verdict that had already been stored. It has to survive this
+        # projection: a fixed whitelist here silently drops it, and then the
+        # one question the field exists to answer -- "this was an order
+        # yesterday, why is it parked today?" -- is unanswerable from the row.
+        "previous": verdict.get("previous"),
     }
 
 
@@ -617,6 +623,42 @@ def promote_parked_job(
 _PRE_REVIEW_JOB_STATUSES = frozenset({"queued", "processing", "needs_review"})
 
 
+def _current_verdict(doc: IntakeDocument, block: dict) -> dict | None:
+    """Re-judge a text message with the CURRENT rules, or None if we cannot.
+
+    The recorded verdict is a snapshot of whatever the classifier said at
+    ingest time, and that is the whole reason this function exists. The Tier 0
+    question rule was added *after* these messages had already been classified,
+    so the message in the bug report — "where is this account??" — is stored as
+    Tier 1. A backfill that trusted the snapshot would leave it exactly where it
+    is, and the one message the work was done for would not move.
+
+    Returns None when the message must not be re-judged, and the caller then
+    falls back to the recorded verdict:
+
+      * anything that involved an attachment. An attachment is always an order,
+        so there is no verdict to change, and re-reading the blob would mean
+        loading megabytes of image to reach a conclusion that cannot differ.
+      * a document whose text we cannot recover (a non-UTF-8 blob, or bytes
+        that never made it into the row). Guessing from a truncated excerpt is
+        not acceptable: an excerpt is the first 120 characters, so a long order
+        that opens with a question would look like chatter.
+    """
+    if (block.get("msgtype") or "text") != "text" or block.get("file_url"):
+        return None
+    if (doc.source_type or "") != "text":
+        return None
+    data = doc.file_data
+    if not data:
+        return None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    verdict = classify_message(text=text, msgtype="text", has_attachment=False)
+    return {**verdict.as_dict(), "excerpt": text[:120]}
+
+
 def backfill_triage_parks(
     db: Session,
     *,
@@ -628,9 +670,16 @@ def backfill_triage_parks(
     `intake_triage_mode` governs messages arriving *from now on*, so switching
     the gate on leaves every piece of chatter ingested while it was in "shadow"
     sitting in the queue — the fix would be invisible on the exact screen the
-    operator is looking at. This walks the WeCom documents that already carry a
-    verdict and applies the rule the ingest path now applies: `not_order`
-    **and** Tier 0.
+    operator is looking at. This walks the WeCom documents and applies the rule
+    the ingest path now applies: `not_order` **and** Tier 0.
+
+    Where the text is recoverable it is **re-judged with the current rules**
+    rather than taken from the stored verdict, because the stored verdict is a
+    snapshot of the classifier as it was at ingest time. That is not a
+    hypothetical: the Tier 0 question rule was added after these messages were
+    already classified, so the reported case is stored as Tier 1 and a backfill
+    that trusted the snapshot would leave it exactly where it is. See
+    `_current_verdict` for when re-judging is refused.
 
     Tier 0 only, for the same reason the live gate is Tier 0 only — a Tier 1
     score cannot separate "几点送？" from "能送点土豆过来吗？", and parking the
@@ -665,19 +714,24 @@ def backfill_triage_parks(
     for doc in docs:
         scanned += 1
         block = (doc.document_meta or {}).get("wecom") or {}
-        verdict = block.get("triage") or {}
-        if not verdict:
+        recorded = block.get("triage") or {}
+        if not recorded:
             # Ingested before triage existed: nothing ever judged it, so there
             # is no verdict to act on and this must not guess.
             unclassified += 1
             continue
-        if verdict.get("overridden"):
+        if recorded.get("overridden"):
             # A human already promoted it. Re-parking would undo a decision.
             overridden += 1
             continue
-        if verdict.get("parked"):
+        if recorded.get("parked"):
             already_parked += 1
             continue
+
+        # Judge with the CURRENT rules wherever we can. The recorded verdict is
+        # a snapshot from ingest time and may predate the rule that makes this
+        # message a non-order — which is exactly the case in the bug report.
+        verdict = _current_verdict(doc, block) or recorded
         if verdict.get("decision") != NOT_ORDER or verdict.get("tier") != "tier0":
             continue
 
@@ -692,16 +746,29 @@ def backfill_triage_parks(
             continue
 
         reasons = list(verdict.get("reasons") or [])
-        would_park.append(
-            {
-                "document_id": doc.id,
-                "job_id": job.id,
-                "job_status": job.status,
-                "msgid": block.get("msgid"),
-                "excerpt": (verdict.get("excerpt") or "")[:120],
-                "reasons": reasons,
+        entry = {
+            "document_id": doc.id,
+            "job_id": job.id,
+            "job_status": job.status,
+            "msgid": block.get("msgid"),
+            "excerpt": (verdict.get("excerpt") or "")[:120],
+            "reasons": reasons,
+        }
+        # Say so when the verdict on record is NOT the one being acted on.
+        # Without this the dry run reports a row as parkable and the operator
+        # cannot tell whether the classifier agrees with what the row already
+        # says -- which is the whole difference between "the gate was off" and
+        # "the rules changed under a message already judged".
+        if (
+            verdict.get("tier") != recorded.get("tier")
+            or verdict.get("decision") != recorded.get("decision")
+        ):
+            entry["recorded"] = {
+                "decision": recorded.get("decision"),
+                "tier": recorded.get("tier"),
+                "score": recorded.get("score"),
             }
-        )
+        would_park.append(entry)
         if not apply:
             continue
 
@@ -719,6 +786,18 @@ def backfill_triage_parks(
         new_verdict = dict(verdict)
         new_verdict["parked"] = True
         new_verdict["parked_by"] = "backfill"
+        # Keep the superseded snapshot when the rules moved under it, so "why
+        # did this verdict change?" stays answerable from the row itself.
+        if (
+            new_verdict.get("tier") != recorded.get("tier")
+            or new_verdict.get("decision") != recorded.get("decision")
+        ):
+            new_verdict["previous"] = {
+                "decision": recorded.get("decision"),
+                "tier": recorded.get("tier"),
+                "score": recorded.get("score"),
+            }
+        new_verdict.setdefault("excerpt", recorded.get("excerpt"))
         block["triage"] = new_verdict
         meta["wecom"] = block
         meta["triage"] = new_verdict

@@ -123,6 +123,20 @@ interface DocTriage {
   excerpt?: string | null;
   parked: boolean;
   overridden: boolean;
+  /**
+   * The verdict this one replaced. Written only by the backfill, and only when
+   * the rules moved under a message that had already been judged.
+   *
+   * This matters because a verdict is a *snapshot* of the classifier at the
+   * moment the message arrived, not a live fact. A row that changed from
+   * "not an order, but let it through" to "parked" looks arbitrary on its own;
+   * with the superseded verdict beside it, the change is checkable.
+   */
+  previous?: {
+    decision?: string | null;
+    tier?: string | null;
+    score?: number | null;
+  } | null;
 }
 /**
  * The conversation's binding state, from `_doc_out`.
@@ -543,6 +557,17 @@ export default function IntakePage() {
             {r.job_status === "parked" && r.triage?.reasons?.length ? (
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                 {r.triage.reasons.join("; ")}
+              </Typography.Text>
+            ) : null}
+            {/* A verdict is a snapshot of the rules at ingest time, so a row
+                can legitimately change from "let it through" to "parked" after
+                a backfill. Without the superseded verdict the change is
+                unreadable and looks like the classifier flip-flopping. */}
+            {r.job_status === "parked" && r.triage?.previous ? (
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {t("pages.intake.parkedReclassified", {
+                  previous: `${r.triage.previous.tier} / ${r.triage.previous.decision}`,
+                })}
               </Typography.Text>
             ) : null}
           </Space>

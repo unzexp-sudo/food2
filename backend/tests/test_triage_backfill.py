@@ -324,3 +324,148 @@ def test_backfill_skips_a_message_that_was_never_classified(
     report = _backfill(client, admin_headers, apply=False)
 
     assert report["unclassified"] >= 1, "an unjudged message was not reported as such"
+
+
+# --- Re-judging a stale verdict ----------------------------------------------
+#
+# The recorded verdict is a snapshot of the classifier as it was at ingest time.
+# The Tier 0 question rule was added after these messages were already
+# classified, so in production "where is this account??" sits in the inbox
+# stored as `tier: tier1, decision: not_order`. A backfill that trusted that
+# snapshot would leave the one message the work was done for exactly where it
+# is. These tests plant that exact snapshot.
+
+
+def _document(client, headers, job_id: str) -> dict:
+    job = _job(client, headers, job_id)
+    r = client.get(f"/api/v1/intake/documents/{job['document_id']}", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _overwrite_verdict(msgid: str, verdict: dict) -> None:
+    """Rewrite the stored Gate 1 verdict, as an older classifier would have."""
+    from app.core.database import SessionLocal
+    from app.models import IntakeDocument
+    from sqlalchemy.orm.attributes import flag_modified
+
+    with SessionLocal() as db:
+        doc = (
+            db.query(IntakeDocument)
+            .filter(IntakeDocument.document_meta["wecom"]["msgid"].as_string() == msgid)
+            .one()
+        )
+        meta = dict(doc.document_meta or {})
+        wecom = dict(meta.get("wecom") or {})
+        wecom["triage"] = {**verdict, "excerpt": "where is this account??"}
+        meta["wecom"] = wecom
+        doc.document_meta = meta
+        flag_modified(doc, "document_meta")
+        db.commit()
+
+
+STALE_TIER1 = {
+    "decision": "not_order",
+    "tier": "tier1",
+    "score": -3,
+    "reasons": ["question with no quantity — not an order"],
+}
+
+
+def test_backfill_rejudges_a_stale_tier1_verdict(client, admin_headers, shadow, require_review):
+    """The reported message, in the state production actually stores it."""
+    job_id, msgid = _chatter(client, admin_headers, content="where is this account??")
+    _overwrite_verdict(msgid, STALE_TIER1)
+
+    report = _backfill(client, admin_headers, apply=False)
+
+    assert job_id in {p["job_id"] for p in report["would_park"]}, (
+        "the stale Tier 1 snapshot was trusted, so the reported message was "
+        "left in the inbox"
+    )
+
+
+def test_the_rejudged_verdict_records_what_it_superseded(client, admin_headers, shadow, require_review):
+    """A verdict that changes must say what it changed from."""
+    job_id, msgid = _chatter(client, admin_headers, content="where is this account??")
+    _overwrite_verdict(msgid, STALE_TIER1)
+    _backfill(client, admin_headers, apply=True)
+
+    triage = _document(client, admin_headers, job_id)["triage"]
+    assert triage["tier"] == "tier0", "the re-judged verdict was not stored"
+    assert triage["parked"] is True
+    assert triage["previous"]["tier"] == "tier1", (
+        "the superseded verdict was not recorded — 'why did this change?' is "
+        "no longer answerable from the row"
+    )
+
+
+def test_the_dry_run_says_which_rows_the_rules_moved_under(
+    client, admin_headers, shadow, require_review
+):
+    """Two different reasons a row is parkable, and they must not look alike.
+
+    A row is listed either because the gate was off when it arrived (the
+    classifier agrees with what the row already says) or because the rules
+    changed after it was judged (the classifier disagrees with the snapshot).
+    Only the second one is a re-judgement, and an operator approving the list
+    is entitled to see which rows those are.
+    """
+    job_id, msgid = _chatter(client, admin_headers, content="where is this account??")
+    _overwrite_verdict(msgid, STALE_TIER1)
+
+    entry = next(
+        p for p in _backfill(client, admin_headers, apply=False)["would_park"]
+        if p["job_id"] == job_id
+    )
+
+    assert entry["recorded"] == {"decision": "not_order", "tier": "tier1", "score": -3}, (
+        "the dry run hid the fact that the verdict on record was superseded"
+    )
+    # The reason shown must be the CURRENT rule's, not the snapshot's. Echoing
+    # the stored reason would make the list look like it agrees with the row
+    # while acting on something else entirely.
+    assert entry["reasons"] == ["a question with nothing ordered — not an order"], (
+        "the dry run reported the superseded reason instead of the current one"
+    )
+
+
+def test_a_row_whose_verdict_did_not_change_reports_no_superseded_verdict(
+    client, admin_headers, shadow, require_review
+):
+    """The field must be absent, not null-and-noisy, when nothing was replaced.
+
+    Otherwise every ordinary park carries a `recorded` block and the one signal
+    that means "the rules moved" is indistinguishable from the background.
+    """
+    job_id, _ = _chatter(client, admin_headers, content="hi")
+
+    entry = next(
+        p for p in _backfill(client, admin_headers, apply=False)["would_park"]
+        if p["job_id"] == job_id
+    )
+
+    assert "recorded" not in entry, (
+        "a row the classifier still agrees with was reported as re-judged"
+    )
+
+
+def test_rejudging_does_not_park_a_long_order_that_opens_with_a_question(
+    client, admin_headers, shadow, require_review
+):
+    """The risk re-judging introduces, and why the real text is used.
+
+    The stored excerpt is truncated to 120 characters, so judging from it would
+    see only the question. Judging the real text sees the quantities. This is
+    the case that makes "just use the excerpt" unacceptable.
+    """
+    msgid = _msgid()
+    r = _post(client, "几点送？\n土豆 50斤\n大白菜 30斤", msgid)
+    assert r.status_code == 201, r.text
+
+    report = _backfill(client, admin_headers, apply=True)
+
+    assert msgid not in {p["msgid"] for p in report["would_park"]}, (
+        "a real order was parked because only its opening question was judged"
+    )
+    assert _job(client, admin_headers, r.json()["job_id"])["status"] != "parked"

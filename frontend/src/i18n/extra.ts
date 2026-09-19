@@ -124,6 +124,12 @@ const extra = {
       // is a lost order, so surface the count and offer a way back.
       parkedBanner: "{{count}} message(s) parked as non-orders",
       parkedOnly: "Parked only",
+      // A verdict is a snapshot of the rules at the moment the message
+      // arrived. When a later backfill re-judged it, the row has to say so --
+      // otherwise a message that moved from "let it through" to "parked"
+      // looks arbitrary, and an operator cannot tell a corrected mistake from
+      // a classifier that changed its mind for no reason.
+      parkedReclassified: "Re-judged: was {{previous}}",
       parkedHint:
         "These looked like chatter, not orders. If one is actually an order, promote it back into the queue.",
       promote: "Promote",

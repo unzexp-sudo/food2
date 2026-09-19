@@ -105,6 +105,7 @@ const extraZh = {
       reviewHint: "加粗的行仍需人工核对，核对后才会生成订单。",
       parkedBanner: "{{count}} 条消息被判定为非订单并已归档",
       parkedOnly: "只看已归档",
+      parkedReclassified: "已重新判定：原为 {{previous}}",
       parkedHint: "这些消息疑似闲聊而非订单，默认不在收件箱显示。如判断有误，请点「恢复」放回处理队列。",
       promote: "恢复",
       promoteConfirm: "将该消息放回待处理队列？",
