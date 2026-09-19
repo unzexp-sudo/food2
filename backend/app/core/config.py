@@ -117,9 +117,14 @@ class Settings(BaseSettings):
     #                which reads the table in place. Slower and pricier per
     #                page, but it does not discard a table as a figure.
     image_ocr_provider: str = "mistral"
-    # Vision model used when image_ocr_provider == "pixtral". Must be a model
-    # that accepts an image_url content part.
-    pixtral_ocr_model: str = "pixtral-large-latest"
+    # Vision model used for a re-read. Must accept an image_url content part.
+    #
+    # "pixtral-large-latest" is NOT available on this account: the API answers
+    # 400 {"message": "Invalid model: pixtral-large-latest"}, which silently
+    # turned every rescue into "vision re-read was not available". Verified
+    # 2026-09-19 by calling the endpoint with each candidate — pixtral-12b-2409
+    # returns 200 and reads the 14-row table correctly, breakdowns included.
+    pixtral_ocr_model: str = "pixtral-12b-2409"
     # Seconds allowed for one vision read. A dense table on a large photo can
     # take well past the 120s the OCR endpoint needs.
     vision_ocr_timeout: float = 180.0
@@ -181,9 +186,18 @@ class Settings(BaseSettings):
     #   "off"     — no classification at all, behave exactly as before
     #   "shadow"  — classify and record the verdict, change NO behaviour
     #   "enforce" — non-orders are parked, only orders create an intake job
-    # Default is "shadow" so the verdicts can be reviewed in production before
-    # anything starts being hidden from the team.
-    intake_triage_mode: str = "shadow"
+    #
+    # Default is "enforce": the gate is the product behaviour, not an
+    # experiment. It shipped as "shadow" so the verdicts could be eyeballed
+    # first, and that is the right way to *roll one out* — but a default of
+    # "shadow" is indistinguishable from a gate that does not work, which is
+    # exactly how it was read: chatter kept arriving and the code looked fine.
+    # Nothing in the product surface said the classifier was running in
+    # record-only mode. `/api/health` now reports `intake_triage_mode` for the
+    # same reason — a safety gate that can be silently off is not a gate.
+    #
+    # Set it to "shadow" to go back to observing without hiding anything.
+    intake_triage_mode: str = "enforce"
 
     # CORS
     cors_origins: str = "http://localhost:5173"

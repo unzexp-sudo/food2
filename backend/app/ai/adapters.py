@@ -1424,6 +1424,10 @@ Rules — follow them exactly:
 4. If a cell is unreadable or missing, use null. Never guess, never invent a
    product, never fill a gap from what you expect to see.
 5. If there is no order table in the image at all, return {"lines": []}.
+6. Use these key names EXACTLY as written. Do not rename them, and do not add
+   keys that are not listed — a destination/customer column belongs in
+   `customer_name`, not in `recipient`, and the row's unit belongs in
+   `total_unit`, not `unit`.
 """
 
 
@@ -1528,20 +1532,21 @@ class VisionTableExtractor:
                 # A row with no product name is not a row we can act on. Skip it
                 # rather than emitting a blank line for someone to delete.
                 continue
-            qty = _as_float(row.get("total_quantity"))
+            qty = _first_float(row, "total_quantity", "quantity")
             if qty is None:
                 unreadable += 1
             breakdowns: list[dict] = []
             for bd in row.get("breakdowns") or []:
                 if not isinstance(bd, dict):
                     continue
+                bd_name = _first_str(bd, *_BREAKDOWN_NAME_KEYS)
                 breakdowns.append({
-                    "raw": (bd.get("customer_name") or ""),
-                    "customer_name": bd.get("customer_name"),
+                    "raw": (bd_name or ""),
+                    "customer_name": bd_name,
                     "customer_code": None,
-                    "quantity": _as_float(bd.get("quantity")),
-                    "unit": bd.get("unit"),
-                    "note": bd.get("note"),
+                    "quantity": _first_float(bd, "quantity", "qty"),
+                    "unit": _first_str(bd, "unit"),
+                    "note": _first_str(bd, "note", "notes"),
                     "menu_code": None,
                     "menu_label": None,
                 })
@@ -1554,16 +1559,16 @@ class VisionTableExtractor:
                 "raw_text": name,
                 "product_name": name,
                 "total_quantity": qty,
-                "total_unit": row.get("total_unit"),
+                "total_unit": _first_str(row, "total_unit", "unit"),
                 "breakdowns": breakdowns,
-                "notes": row.get("notes"),
+                "notes": _first_str(row, "notes", "note"),
                 "extra": {},
             })
             lines.append(RawLine(
                 product_name=name,
                 quantity=qty,
-                unit=row.get("total_unit"),
-                notes=row.get("notes"),
+                unit=_first_str(row, "total_unit", "unit"),
+                notes=_first_str(row, "notes", "note"),
                 breakdowns=breakdowns,
                 header=header or None,
                 # A chat model reports no confidence. None is the honest value:
@@ -1659,6 +1664,33 @@ def _as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+# Key names the vision model has actually used for one field. The prompt asks for
+# a specific schema and the model does not reliably honour it: on the real 14-row
+# order it answered `recipient` where the prompt said `customer_name`, and
+# `unit`/`note` where the prompt said `total_unit`/`notes`. Re-prompting is not a
+# fix — the reply is otherwise correct, and throwing away a good transcription
+# because of a key name is worse than reading the name it chose.
+_BREAKDOWN_NAME_KEYS = ("customer_name", "recipient", "customer", "destination", "name")
+
+
+def _first_str(row: dict, *keys: str) -> str | None:
+    """The first non-empty string among `keys`, else None."""
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _first_float(row: dict, *keys: str) -> float | None:
+    """The first readable number among `keys`, else None."""
+    for key in keys:
+        value = _as_float(row.get(key))
+        if value is not None:
+            return value
+    return None
 
 
 def get_extractor():

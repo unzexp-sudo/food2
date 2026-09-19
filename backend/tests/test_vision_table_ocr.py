@@ -113,7 +113,10 @@ def test_the_image_is_sent_as_a_vision_content_part(tmp_path, monkeypatch, pixtr
     # Transcription, not composition: a model that is allowed to wander will
     # "correct" a quantity it misread into a plausible one.
     assert body["temperature"] == 0.0
-    assert body["model"] == "pixtral-large-latest"
+    # Read from settings rather than a literal: which vision model this account
+    # is licensed for is a deployment fact, not a code invariant. Pinning the
+    # literal here is what would hide an "Invalid model" 400.
+    assert body["model"] == settings.pixtral_ocr_model
 
 
 def test_the_prompt_forbids_inventing_a_product(tmp_path, monkeypatch, pixtral_on):
@@ -603,3 +606,55 @@ def test_a_page_missing_from_disk_is_not_rescued(tmp_path, monkeypatch, rescue_o
         figures=1,
     ) is None
     assert not any("chat/completions" in c["url"] for c in calls)
+
+
+def test_a_reply_that_renames_the_fields_is_still_read(tmp_path, monkeypatch, pixtral_on):
+    """The model does not honour the requested schema, and the reply is still
+    correct — so it must not be discarded over a key name.
+
+    Verbatim behaviour on the real 14-row order: `recipient` where the prompt
+    asked for `customer_name`, `unit` for `total_unit`, `note` for `notes`, and
+    the JSON wrapped in prose and a ```json fence. Every product, quantity and
+    destination in it was right.
+    """
+    reply = (
+        "Here is the transcription of the table in JSON format based on the "
+        "provided image:\n\n```json\n"
+        + json.dumps(
+            {
+                "supplier": "广东岳元绿色食品有限公司",
+                "lines": [
+                    {
+                        "line_no": 2,
+                        "product_name": "小豆腐",
+                        "total_quantity": 524,
+                        "unit": "斤",
+                        "breakdowns": [
+                            {"recipient": "佛山市潮连高级中学", "quantity": 25},
+                            {"recipient": "广州市老人院", "quantity": 400, "note": "午餐"},
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n```"
+    )
+    _capture(monkeypatch, _chat_reply(reply))
+
+    result = VisionTableExtractor().extract(
+        source_type="image", file_path=_img(tmp_path), original_filename="order.png"
+    )
+
+    assert len(result.lines) == 1
+    line = result.lines[0]
+    assert line.product_name == "小豆腐"
+    assert line.quantity == 524.0
+    assert line.unit == "斤"
+    # The per-customer split is the valuable half of this table; losing the
+    # destination because it was called `recipient` would lose the delivery.
+    assert [bd["customer_name"] for bd in line.breakdowns] == [
+        "佛山市潮连高级中学",
+        "广州市老人院",
+    ]
+    assert [bd["quantity"] for bd in line.breakdowns] == [25.0, 400.0]
