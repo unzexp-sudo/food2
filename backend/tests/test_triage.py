@@ -14,8 +14,11 @@ import pytest
 from app.services.intake.triage import (
     NOT_ORDER,
     ORDER,
+    PARKABLE_TIER,
     UNCLEAR,
+    TriageVerdict,
     classify_message,
+    is_parkable,
 )
 
 
@@ -334,4 +337,128 @@ def test_bare_words_that_are_not_orders_stay_in_the_inbox(text):
     v = classify(text)
     assert v.tier != "tier0", (
         f"{text!r} became parkable; verify it cannot be confused with a product name"
+    )
+
+
+# --- One park rule, three callers --------------------------------------------
+#
+# The park rule was written out three times: in the ingest path, in the backfill
+# and in /triage-report. Two checked the tier and one did not, so the report
+# listed a tier1 non-order as "would be parked" while the gate would never touch
+# it -- on a screen whose stated purpose is to be eyeballed for false positives
+# before trusting enforcement. These tests pin the rule once and then pin that
+# every caller agrees with it.
+
+def test_the_park_rule_is_the_tier0_not_order_rule():
+    assert is_parkable(TriageVerdict(decision=NOT_ORDER, tier="tier0"))
+    assert not is_parkable(TriageVerdict(decision=NOT_ORDER, tier="tier1")), (
+        "a heuristic verdict became parkable"
+    )
+    assert not is_parkable(TriageVerdict(decision=ORDER, tier="tier0"))
+    assert not is_parkable(TriageVerdict(decision=UNCLEAR, tier="tier1"))
+
+
+def test_the_park_rule_reads_a_stored_verdict_as_well_as_a_live_one():
+    """The ingest path holds a dataclass; the report reads a stored dict.
+
+    Both shapes must answer the same way, or the report describes a rule that
+    is not the rule being applied -- which is the bug this replaced.
+    """
+    live = TriageVerdict(decision=NOT_ORDER, tier="tier0", score=0, reasons=["greeting only (hi)"])
+    stored = {**live.as_dict(), "excerpt": "hi", "parked": True}
+
+    assert is_parkable(live) is True
+    assert is_parkable(stored) is True
+    assert is_parkable({**stored, "tier": "tier1"}) is False
+
+
+def test_the_park_rule_ignores_the_mode(monkeypatch):
+    """`shadow` is about whether the rule runs, not what the rule is.
+
+    The report has to describe the rule while enforcement is off -- that is the
+    entire point of a shadow readout -- so the predicate must not consult the
+    mode. The mode is applied by the caller. Varying the mode and asserting the
+    predicate is unchanged is the only way to test that.
+    """
+    from app.core.config import settings
+
+    verdict = TriageVerdict(decision=NOT_ORDER, tier="tier0")
+
+    for mode in ("shadow", "enforce", "off"):
+        monkeypatch.setattr(settings, "intake_triage_mode", mode)
+        assert is_parkable(verdict) is True, (
+            f"the predicate changed with the mode ({mode}) -- it must describe "
+            "the rule, not whether the rule is running"
+        )
+
+
+def test_is_parkable_is_false_for_nothing():
+    assert is_parkable(None) is False
+    assert is_parkable({}) is False
+
+
+def test_the_report_never_advertises_a_row_the_gate_would_not_park(client):
+    """The invariant: every row in `would_park` is in the tier that gets parked.
+
+    `test` is the case that exposed this. It is `not_order` at tier1, so it is
+    left visible on purpose; listing it as parkable told the operator the rules
+    were too aggressive when in fact the rules correctly refused it.
+    """
+    _post_wecom(client, "rep-tier-1", "test")
+    _post_wecom(client, "rep-tier-2", "谢谢老板")
+
+    report = client.get("/api/v1/intake/wecom/triage-report", headers=SERVICE_HEADERS).json()
+
+    tiers = {p["tier"] for p in report["would_park"]}
+    assert tiers <= {PARKABLE_TIER}, (
+        f"the report advertised rows the gate will never park: tiers {tiers}"
+    )
+    excerpts = [p["excerpt"] for p in report["would_park"]]
+    assert "谢谢老板" in excerpts, f"a genuine tier0 non-order is missing: {excerpts}"
+    assert "test" not in excerpts, (
+        "a tier1 non-order is listed as parkable -- the gate will never park it"
+    )
+
+
+def test_the_report_accounts_for_every_non_order_it_classified(client):
+    """An exact identity, so nothing can fall out of the report unnoticed.
+
+    Every `not_order` verdict is either something the gate parks, or something
+    it deliberately leaves visible. If those two do not add up to the
+    classification count, the report has lost rows -- which is how a count that
+    included the heuristic tier went unnoticed: it was larger than the list
+    under it and nothing said why.
+    """
+    _post_wecom(client, "rep-count-1", "test")
+    _post_wecom(client, "rep-count-2", "谢谢老板")
+
+    report = client.get("/api/v1/intake/wecom/triage-report", headers=SERVICE_HEADERS).json()
+
+    assert report["parkable_tier"] == PARKABLE_TIER
+    assert report["would_park_count"] >= 1
+    assert report["kept_visible_count"] >= 1, (
+        "no heuristic non-order in the fixture -- this test would be vacuous"
+    )
+    assert (
+        report["would_park_count"] + report["kept_visible_count"]
+        == report["counts"].get(NOT_ORDER, 0)
+    ), (
+        "the parkable and kept-visible counts do not account for every "
+        f"not_order: {report['would_park_count']} + {report['kept_visible_count']} "
+        f"!= {report['counts'].get(NOT_ORDER, 0)}"
+    )
+
+
+def test_the_report_says_how_many_it_deliberately_kept_visible(client):
+    """The gap between "not an order" and "hidden" must be visible, not inferred.
+
+    Otherwise the two numbers simply do not add up and the reader is left to
+    work out why -- which is how the missing tier check survived this long.
+    """
+    _post_wecom(client, "rep-keep-1", "test")
+
+    report = client.get("/api/v1/intake/wecom/triage-report", headers=SERVICE_HEADERS).json()
+
+    assert report["kept_visible_count"] >= 1, (
+        "a heuristic non-order was kept in the inbox without the report saying so"
     )

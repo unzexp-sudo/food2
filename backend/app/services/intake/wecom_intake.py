@@ -32,7 +32,7 @@ from app.core.config import settings
 from app.models import Customer, IntakeDocument, IntakeJob, User
 from app.services.identity import resolve_for_document
 from app.services.intake.service import submit_intake
-from app.services.intake.triage import classify_message
+from app.services.intake.triage import classify_message, is_parkable
 
 # msgtype -> ERP source_type fallback
 logger = logging.getLogger("erp.intake.wecom")
@@ -299,11 +299,7 @@ def ingest_wecom_message(
     # the second one, and a dropped order is a lost sale, not a saved glance.
     # The asymmetry is the same one that makes "unclear" count as an order and
     # that makes a bare product name ("土豆", score 0) stay in the inbox.
-    should_park = (
-        mode == "enforce"
-        and verdict.decision == "not_order"
-        and verdict.tier == "tier0"
-    )
+    should_park = mode == "enforce" and is_parkable(verdict)
     if should_park:
         logger.info(
             "triage PARKED msgid=%s tier=%s reasons=%s", msgid, verdict.tier, verdict.reasons

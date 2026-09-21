@@ -33,7 +33,7 @@ from app.services.intake.service import (
     backfill_triage_parks,
     customers_for,
 )
-from app.services.intake.triage import NOT_ORDER
+from app.services.intake.triage import NOT_ORDER, PARKABLE_TIER, is_parkable
 from app.services.intake.wecom_intake import ingest_wecom_message, list_wecom_documents
 
 router = APIRouter(prefix="/api/v1/intake", tags=["intake-wecom"])
@@ -185,17 +185,29 @@ def triage_report(
     db: Session = Depends(get_db),
     _: User | None = Depends(require_service_or_roles("ops", "finance")),
 ):
-    """What Gate 1 *would* have parked — the shadow-mode readout.
+    """What Gate 1 does with the messages it has already judged.
 
-    While `INTAKE_TRIAGE_MODE=shadow` nothing is hidden; this is how you check
-    the classifier before turning it on. `would_park` is the list to eyeball:
-    if any of those are real orders, the rules need fixing, not the mode.
+    Two readings of the same data, and they must not be confused:
+
+    - `would_park` / `would_park_count` — the messages the park rule selects.
+      This is the list to eyeball: if any of those are real orders, the rules
+      need fixing, not the mode.
+    - `kept_visible_count` — judged `not_order`, but left in the inbox anyway,
+      because the verdict came from the heuristic tier. Not an oversight; see
+      `is_parkable`.
+
+    `would_park_count` counts the same population the list is drawn from, and
+    the population is defined by `is_parkable` — the same function the ingest
+    path and the backfill use. It used to count every `not_order`, which made
+    the report disagree with the gate it exists to describe.
     """
     docs, total = list_wecom_documents(db)
     counts: dict[str, int] = {}
     would_park: list[dict[str, Any]] = []
     unclassified = 0
     actually_parked = 0
+    parkable_total = 0
+    kept_visible = 0
 
     for d in docs:
         block = (d.document_meta or {}).get("wecom") or {}
@@ -211,7 +223,15 @@ def triage_report(
         # and therefore drops to 0 the moment the job is promoted.
         if verdict.get("parked") and not verdict.get("overridden"):
             actually_parked += 1
-        if decision == NOT_ORDER and len(would_park) < limit:
+        if not is_parkable(verdict):
+            # A heuristic `not_order` stays visible by design. Report the count
+            # so the gap between "not an order" and "hidden" is visible rather
+            # than something the reader has to reconcile themselves.
+            if decision == NOT_ORDER:
+                kept_visible += 1
+            continue
+        parkable_total += 1
+        if len(would_park) < limit:
             would_park.append(
                 {
                     "document_id": d.id,
@@ -222,17 +242,24 @@ def triage_report(
                     "score": verdict.get("score"),
                     "tier": verdict.get("tier"),
                     "reasons": verdict.get("reasons"),
+                    "parked": bool(verdict.get("parked")),
+                    "overridden": bool(verdict.get("overridden")),
                 }
             )
 
     return {
         "mode": (settings.intake_triage_mode or "shadow").lower(),
+        "parkable_tier": PARKABLE_TIER,
         "total_wecom_documents": total,
         "classified": total - unclassified,
         "unclassified": unclassified,
         "counts": counts,
-        "would_park_count": counts.get(NOT_ORDER, 0),
+        "would_park_count": parkable_total,
         "would_park": would_park,
+        # Judged not an order, deliberately not hidden. If this is ever
+        # non-zero and the rows are junk, the answer is not to widen the rule
+        # blindly -- see the counterexample in `triage.is_parkable`.
+        "kept_visible_count": kept_visible,
         # What enforcement has currently removed from the inbox. In shadow mode
         # this is 0 and `would_park_count` is the forecast. Promoted messages
         # are excluded — they are visible again.

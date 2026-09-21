@@ -29,7 +29,7 @@ Tier 1 — Chinese heuristics. Quantities with units (50斤 / 2箱 / 10公斤) a
     delivery-time mentions add weight. Score against a threshold.
     **A Tier 1 "not_order" is never parked** — the score cannot tell
     "几点送？" (not an order) from "能送点土豆过来吗？" (an order); both are -1.
-    See the park rule in `services/intake/wecom_intake.py`.
+    The park rule is `is_parkable` below, and it is the only copy of it.
 
 Tier 2 — LLM, for whatever lands in "unclear". Not built yet; unclear
     currently falls through to "order", because dropping a real order is far
@@ -148,6 +148,42 @@ class TriageVerdict:
             "reasons": self.reasons,
             "signals": self.signals,
         }
+
+
+# --- The park rule, in exactly one place --------------------------------------
+#
+# "Which verdicts does Gate 1 hide?" was previously written out three times: in
+# the ingest path, in the backfill, and in `/triage-report`. Two of them checked
+# the tier and one did not, so the report advertised a `tier1` non-order as
+# "would be parked" when the gate would never touch it. That matters because the
+# report is the safety instrument: its whole purpose is to be eyeballed for
+# false positives before trusting enforcement, and a row that can never be
+# parked sitting in that list reads as a rule that is too aggressive.
+#
+# A rule copied into three places will drift. This is the one copy.
+PARKABLE_TIER = "tier0"
+
+
+def is_parkable(verdict: "TriageVerdict | dict[str, Any] | None") -> bool:
+    """Would Gate 1 hide this message? Accepts a live verdict or a stored one.
+
+    Both shapes are needed: the ingest path and the backfill hold a
+    `TriageVerdict`, while the report reads the dict stored in
+    `document_meta["wecom"]["triage"]`.
+
+    Deliberately does NOT consider the mode. `shadow` is about whether the rule
+    is applied, not about what the rule is, and the report has to be able to
+    describe the rule while it is off.
+    """
+    if verdict is None:
+        return False
+    if isinstance(verdict, dict):
+        decision = verdict.get("decision")
+        tier = verdict.get("tier")
+    else:
+        decision = getattr(verdict, "decision", None)
+        tier = getattr(verdict, "tier", None)
+    return decision == NOT_ORDER and tier == PARKABLE_TIER
 
 
 def _normalize(text: str | None) -> str:

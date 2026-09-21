@@ -33,7 +33,7 @@ from app.models import (
 )
 from app.services.identity.service import identity_block_of, is_unbound
 from app.services.intake.company_proposal import build_company_proposal
-from app.services.intake.triage import NOT_ORDER, classify_message
+from app.services.intake.triage import classify_message, is_parkable
 
 logger = logging.getLogger(__name__)
 
@@ -738,7 +738,7 @@ def backfill_triage_parks(
         # a snapshot from ingest time and may predate the rule that makes this
         # message a non-order — which is exactly the case in the bug report.
         verdict = _current_verdict(doc, block) or recorded
-        if verdict.get("decision") != NOT_ORDER or verdict.get("tier") != "tier0":
+        if not is_parkable(verdict):
             continue
 
         job = (
